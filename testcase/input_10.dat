@@ -1,0 +1,11 @@
+0.5
+NET n1 c17 c12 c20 ;
+NET n2 c6 c17 c16 ;
+NET n3 c2 c19 c14 c12 ;
+NET n4 c20 c2 c8 c5 ;
+NET n5 c10 c20 c8 ;
+NET n6 c9 c6 ;
+NET n7 c18 c1 c12 ;
+NET n8 c8 c3 c13 c9 ;
+NET n9 c18 c20 c9 ;
+NET n10 c18 c15 ;

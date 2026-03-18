@@ -5,7 +5,7 @@ SOURCES=src/main.cpp
 OBJECTS=$(SOURCES:.cpp=.o)
 EXECUTABLE=fm
 INCLUDES=
-INPUT=testcase/input_0.5_5_9.dat
+INPUT=testcase/input_5.dat
 OUTPUT=$(subst input,output,$(INPUT))
 
 all: bin/$(EXECUTABLE)

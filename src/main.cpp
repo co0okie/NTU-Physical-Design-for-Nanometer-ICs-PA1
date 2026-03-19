@@ -195,6 +195,23 @@ Solution fiduccia_mattheyses() {
         vector<gain_t> gain_of_cell(num_of_cells); // cell index -> gain of this cell
         uint32_t gain_update_ts = 0;
         vector<uint32_t> gain_update_ts_of_cell(num_of_cells, gain_update_ts); // cell index -> timestamp of the last gain update of this cell, to choose the latest updated cell
+        auto increase_gain_of_cell = [&](cell_t cell, gain_t gain_change) {
+            if (gain_change == 0) return;
+            if (group_of_cell[cell] == 0) {
+                group0_cells_of_gain(gain_of_cell[cell]).erase(iterator_of_cell[cell]);
+                gain_of_cell[cell] += gain_change;
+                group0_cells_of_gain(gain_of_cell[cell]).push_front(cell);
+                iterator_of_cell[cell] = group0_cells_of_gain(gain_of_cell[cell]).begin();
+                group0_max_gain = max(group0_max_gain, gain_of_cell[cell]);
+            } else {
+                group1_cells_of_gain(gain_of_cell[cell]).erase(iterator_of_cell[cell]);
+                gain_of_cell[cell] += gain_change;
+                group1_cells_of_gain(gain_of_cell[cell]).push_front(cell);
+                iterator_of_cell[cell] = group1_cells_of_gain(gain_of_cell[cell]).begin();
+                group1_max_gain = max(group1_max_gain, gain_of_cell[cell]);
+            }
+            gain_update_ts_of_cell[cell] = gain_update_ts;
+        };
         for (cell_t cell = 0; cell < num_of_cells; cell++) {
             gain_t gain = 0;
             for (size_t j = 0; j < nets_of_cell[cell].size(); j++) {
@@ -305,70 +322,42 @@ Solution fiduccia_mattheyses() {
             // update the gain of the affected cells
             for (size_t i = 0; i < nets_of_cell[cell_to_move].size(); i++) {
                 net_t net = nets_of_cell[cell_to_move][i];
-                bool from_1_to_0 = group_of_cell[cell_to_move], from_0_to_1 = !from_1_to_0;
-                bool become_pair = (from_0_to_1 && cell_count_in_group1_of_net(net) == 1)
-                                || (from_1_to_0 && cell_count_in_group0_of_net[net] == 1);
-                bool escape_pair = (from_0_to_1 && cell_count_in_group0_of_net[net] == 2)
-                                || (from_1_to_0 && cell_count_in_group1_of_net(net) == 2);
-                bool become_empty = (from_0_to_1 && cell_count_in_group0_of_net[net] == 1)
-                                || (from_1_to_0 && cell_count_in_group1_of_net(net) == 1);
-                bool escape_empty = (from_0_to_1 && cell_count_in_group1_of_net(net) == 0)
-                                || (from_1_to_0 && cell_count_in_group0_of_net[net] == 0);
-                
-                // no gain change
-                if (!escape_pair && !become_pair && !become_empty && !escape_empty) continue;
-        
-                LOG(TRACE) << "[" << name_of_net[net] << " "
-                    << cell_count_in_group0_of_net[net] << "/" 
-                    << cell_count_in_group1_of_net(net) << " "
-                    << (become_pair ? "become_pair " : "") 
-                    << (escape_pair ? "escape_pair " : "") 
-                    << (become_empty ? "become_empty " : "") 
-                    << (escape_empty ? "escape_empty " : "");
-        
-                for (size_t j = 0; j < cells_of_net[net].size(); j++) {
-                    cell_t cell = cells_of_net[net][j];
-                    if (cell == cell_to_move || locked_of_cell[cell]) continue;
-        
-                    int gain_change = 0;
-                    if (become_pair && ((from_0_to_1 && group_of_cell[cell] == 1) 
-                    || (from_1_to_0 && group_of_cell[cell] == 0))) {
-                        gain_change -= 1;
-                    } else if (escape_empty) {
-                        gain_change += 1;
+
+                bool FROM_group = group_of_cell[cell_to_move], TO_group = !FROM_group;
+                size_t TO_group_cell_count = (group_of_cell[cell_to_move] == 0) ? 
+                    cell_count_in_group1_of_net(net) : cell_count_in_group0_of_net[net];
+                size_t FROM_group_cell_count = (group_of_cell[cell_to_move] == 0) ? 
+                    cell_count_in_group0_of_net[net] : cell_count_in_group1_of_net(net);
+
+                if (TO_group_cell_count == 0) {
+                    for (cell_t cell : cells_of_net[net]) {
+                        if (!locked_of_cell[cell] && cell != cell_to_move) increase_gain_of_cell(cell, 1);
                     }
-                    if (escape_pair && ((from_0_to_1 && group_of_cell[cell] == 0) 
-                    || (from_1_to_0 && group_of_cell[cell] == 1))) {
-                        gain_change += 1;
-                    } else if (become_empty) {
-                        gain_change -= 1;
+                } else if (TO_group_cell_count == 1) {
+                    for (cell_t cell : cells_of_net[net]) {
+                        if (!locked_of_cell[cell] && cell != cell_to_move && group_of_cell[cell] == TO_group) {
+                            increase_gain_of_cell(cell, -1);
+                            break;
+                        }
                     }
-        
-                    if (gain_change == 0) continue;
-        
-                    LOG(TRACE) << "(" << name_of_cell[cell] 
-                        << " gain " << gain_of_cell[cell] << " -> " 
-                        << gain_of_cell[cell] + gain_change << ")" << std::flush;
-                    
-                    if (group_of_cell[cell] == 0) {
-                        group0_cells_of_gain(gain_of_cell[cell]).erase(iterator_of_cell[cell]);
-                        gain_of_cell[cell] += gain_change;
-                        group0_cells_of_gain(gain_of_cell[cell]).push_front(cell);
-                        iterator_of_cell[cell] = group0_cells_of_gain(gain_of_cell[cell]).begin();
-                        group0_max_gain = max(group0_max_gain, gain_of_cell[cell]);
-                    } else {
-                        group1_cells_of_gain(gain_of_cell[cell]).erase(iterator_of_cell[cell]);
-                        gain_of_cell[cell] += gain_change;
-                        group1_cells_of_gain(gain_of_cell[cell]).push_front(cell);
-                        iterator_of_cell[cell] = group1_cells_of_gain(gain_of_cell[cell]).begin();
-                        group1_max_gain = max(group1_max_gain, gain_of_cell[cell]);
-                    }
-                    gain_update_ts_of_cell[cell] = gain_update_ts;
                 }
-        
-                LOG(TRACE) << "]" << std::flush;
+
+                TO_group_cell_count++;
+                FROM_group_cell_count--;
+
+                if (FROM_group_cell_count == 0) {
+                    for (cell_t cell : cells_of_net[net]) {
+                        if (!locked_of_cell[cell] && cell != cell_to_move) increase_gain_of_cell(cell, -1);
+                    }
+                } else if (FROM_group_cell_count == 1) {
+                    for (cell_t cell : cells_of_net[net]) {
+                        if (!locked_of_cell[cell] && cell != cell_to_move && group_of_cell[cell] == FROM_group) {
+                            increase_gain_of_cell(cell, 1);
+                            break;
+                        }
+                    }
+                }
             }
-            LOG(TRACE) << endl;
         
             // move cell to another group
             if (group_of_cell[cell_to_move] == 0) {

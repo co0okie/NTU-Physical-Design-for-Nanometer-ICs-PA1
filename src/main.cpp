@@ -193,6 +193,8 @@ Solution fiduccia_mattheyses() {
         auto group1_cells_of_gain = [&](gain_t gain) -> list<cell_t>& { return group1_cells_of_offset_gain[gain + MAX_GAIN]; };
         vector<list<cell_t>::iterator> iterator_of_cell(num_of_cells); // cell index -> iterator to the cell's position in cells_of_gain
         vector<gain_t> gain_of_cell(num_of_cells); // cell index -> gain of this cell
+        uint32_t gain_update_ts = 0;
+        vector<uint32_t> gain_update_ts_of_cell(num_of_cells, gain_update_ts); // cell index -> timestamp of the last gain update of this cell, to choose the latest updated cell
         for (cell_t cell = 0; cell < num_of_cells; cell++) {
             gain_t gain = 0;
             for (size_t j = 0; j < nets_of_cell[cell].size(); j++) {
@@ -281,11 +283,15 @@ Solution fiduccia_mattheyses() {
             } else { // pick a cell in either group
                 while (group0_cells_of_gain(group0_max_gain).empty()) group0_max_gain--;
                 while (group1_cells_of_gain(group1_max_gain).empty()) group1_max_gain--;
-                cell_to_move = (
-                    (group0_max_gain > group1_max_gain) ? 
-                    group0_cells_of_gain(group0_max_gain) :
-                    group1_cells_of_gain(group1_max_gain)
-                ).front();
+                cell_t cell0 = group0_cells_of_gain(group0_max_gain).front();
+                cell_t cell1 = group1_cells_of_gain(group1_max_gain).front();
+                if (group0_max_gain == group1_max_gain) {
+                    cell_to_move = (gain_update_ts_of_cell[cell0] >= gain_update_ts_of_cell[cell1]) ? cell0 : cell1;
+                } else if (group0_max_gain > group1_max_gain) {
+                    cell_to_move = cell0;
+                } else {
+                    cell_to_move = cell1;
+                }
             }
         
             LOG(DEBUG) << "group0_max_gain " << group0_max_gain << " group1_max_gain " << group1_max_gain << endl;
@@ -293,6 +299,8 @@ Solution fiduccia_mattheyses() {
                 << group_of_cell[cell_to_move] << " to " << !group_of_cell[cell_to_move]
                 << " gain " << gain_of_cell[cell_to_move] << " cut_size " << cut_size
                 << " -> " << cut_size - gain_of_cell[cell_to_move] << endl;
+
+            gain_update_ts++;
         
             // update the gain of the affected cells
             for (size_t i = 0; i < nets_of_cell[cell_to_move].size(); i++) {
@@ -341,6 +349,7 @@ Solution fiduccia_mattheyses() {
                     LOG(TRACE) << "(" << name_of_cell[cell] 
                         << " gain " << gain_of_cell[cell] << " -> " 
                         << gain_of_cell[cell] + gain_change << ")" << std::flush;
+                    
                     if (group_of_cell[cell] == 0) {
                         group0_cells_of_gain(gain_of_cell[cell]).erase(iterator_of_cell[cell]);
                         gain_of_cell[cell] += gain_change;
@@ -354,6 +363,7 @@ Solution fiduccia_mattheyses() {
                         iterator_of_cell[cell] = group1_cells_of_gain(gain_of_cell[cell]).begin();
                         group1_max_gain = max(group1_max_gain, gain_of_cell[cell]);
                     }
+                    gain_update_ts_of_cell[cell] = gain_update_ts;
                 }
         
                 LOG(TRACE) << "]" << std::flush;

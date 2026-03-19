@@ -32,7 +32,8 @@ run_all: bin/$(EXECUTABLE)
 		{ T[$$i]=$$( { TIMEFORMAT="%R"; time ./$< testcase/input_$$i.dat testcase/output_$$i.dat 1>&3 2>&4; } 2>&1 ); } 3>&1 4>&2; \
 	done; \
 	for i in 0 1 2 3 4 5; do \
-		evaluator/evaluator.sh testcase/input_$$i.dat testcase/output_$$i.dat $${T[$$i]}; \
+		evaluator/evaluator.sh testcase/input_$$i.dat testcase/output_$$i.dat $${T[$$i]} \
+		| tee testcase/result_$$i.txt; \
 	done; \
 	rm -f time_*.tmp
 

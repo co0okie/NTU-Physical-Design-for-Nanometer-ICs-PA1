@@ -30,6 +30,7 @@ constexpr LogLevel LOG_LEVEL = INFO;
 typedef uint64_t cell_t; // cell index type
 typedef uint64_t net_t; // net index type
 typedef int64_t gain_t; // gain type
+constexpr gain_t MIN_GAIN = INT64_MIN;
 
 struct Solution {
     size_t cut_size;
@@ -41,14 +42,38 @@ double balance_degree;
 
 size_t num_of_nets = 0;
 size_t num_of_cells = 0;
-vector<string> name_of_net; // net index -> net name
-vector<string> name_of_cell; // cell index -> cell name
-vector<vector<cell_t>> cells_of_net; // net index -> cell indices
+
+vector<string> name_of_cell; // cell -> cell name
 vector<vector<net_t>> nets_of_cell; // cell index -> net indices
+vector<bool> group_of_cell; // cell -> group index (0 or 1)
+vector<list<cell_t>::iterator> iterator_of_cell; // cell -> iterator to the cell's position in cells_of_gain
+vector<gain_t> gain_of_cell; // cell -> gain of this cell
+vector<uint32_t> gain_update_ts_of_cell; // cell -> timestamp of the last gain update of this cell, to choose the latest updated cell
+vector<bool> locked_of_cell; // cell -> {0: unlocked, 1: locked}
+
+vector<string> name_of_net; // net -> net name
+vector<vector<cell_t>> cells_of_net; // net -> cell indices
+vector<size_t> cell_count_in_group0_of_net; // net -> number of cells in group 0 connected to this net
+
 unordered_map<string, cell_t> index_of_cell_name; // cell name -> cell index
 unordered_map<string, net_t> index_of_net_name; // net name -> net index
+vector<list<cell_t>> group0_cells_of_offset_gain; // gain -> list of cell indices in group 0 with this gain, offset by num_of_nets to allow negative gain
+vector<list<cell_t>> group1_cells_of_offset_gain; // gain -> list of cell indices in group 1 with this gain, offset by num_of_nets to allow negative gain
+vector<cell_t> cell_of_picked_No; // cell picked order sequence -> cell index
 
-size_t get_cut_size(const vector<vector<cell_t>> cells_of_net, const vector<net_t> cell_count_in_group0_of_net) {
+list<cell_t>& group0_cells_of_gain(gain_t gain) {
+    return group0_cells_of_offset_gain[gain + static_cast<gain_t>(num_of_nets)];
+}
+
+list<cell_t>& group1_cells_of_gain(gain_t gain) {
+    return group1_cells_of_offset_gain[gain + static_cast<gain_t>(num_of_nets)];
+}
+
+size_t cell_count_in_group1_of_net(net_t net) {
+    return cells_of_net[net].size() - cell_count_in_group0_of_net[net];
+}
+
+size_t get_cut_size(const vector<vector<cell_t>> cells_of_net, const vector<size_t> cell_count_in_group0_of_net) {
     size_t cut_size = 0;
     for (net_t net = 0; net < cells_of_net.size(); net++) {
         if (cell_count_in_group0_of_net[net] != 0 
@@ -149,11 +174,8 @@ int main(int argc, char* argv[]) {
 }
 
 Solution fiduccia_mattheyses() {
-    vector<bool> group_of_cell(num_of_cells); // cell index -> group index (0 or 1)
-    vector<size_t> cell_count_in_group0_of_net(num_of_nets, 0); // net index -> number of cells in group 0 connected to this net
-    auto cell_count_in_group1_of_net = [&](net_t net) {
-        return cells_of_net[net].size() - cell_count_in_group0_of_net[net]; 
-    };
+    group_of_cell.resize(num_of_cells);
+    cell_count_in_group0_of_net.assign(num_of_nets, 0);
     size_t group0_size = num_of_cells / 2;
     auto group1_size = [&]() { return num_of_cells - group0_size; };
     for (cell_t cell = 0; cell < num_of_cells; cell++) {
@@ -184,17 +206,17 @@ Solution fiduccia_mattheyses() {
         LOG(INFO) << "\n================================ iteration " << iter + 1 
             << " ================================" << endl;
 
-        gain_t group0_max_gain = INT64_MIN;
-        gain_t group1_max_gain = INT64_MIN;
+        gain_t group0_max_gain = MIN_GAIN;
+        gain_t group1_max_gain = MIN_GAIN;
         const gain_t MAX_GAIN = num_of_nets; // the maximum gain of a cell is when all its nets are cut nets and it moves to the other group, then all its nets become uncut nets, gain = number of nets connected to this cell <= num_of_nets
-        vector<list<cell_t>> group0_cells_of_offset_gain(2 * MAX_GAIN + 1); // gain -> list of cell indices in group 0 with this gain, offset by num_of_nets to allow negative gain
-        vector<list<cell_t>> group1_cells_of_offset_gain(2 * MAX_GAIN + 1); // gain -> list of cell indices in group 1 with this gain, offset by num_of_nets to allow negative gain
-        auto group0_cells_of_gain = [&](gain_t gain) -> list<cell_t>& { return group0_cells_of_offset_gain[gain + MAX_GAIN]; };
-        auto group1_cells_of_gain = [&](gain_t gain) -> list<cell_t>& { return group1_cells_of_offset_gain[gain + MAX_GAIN]; };
-        vector<list<cell_t>::iterator> iterator_of_cell(num_of_cells); // cell index -> iterator to the cell's position in cells_of_gain
-        vector<gain_t> gain_of_cell(num_of_cells); // cell index -> gain of this cell
+        group0_cells_of_offset_gain.clear();
+        group0_cells_of_offset_gain.resize(2 * MAX_GAIN + 1);
+        group1_cells_of_offset_gain.clear();
+        group1_cells_of_offset_gain.resize(2 * MAX_GAIN + 1);
+        iterator_of_cell.resize(num_of_cells);
+        gain_of_cell.resize(num_of_cells);
         uint32_t gain_update_ts = 0;
-        vector<uint32_t> gain_update_ts_of_cell(num_of_cells, gain_update_ts); // cell index -> timestamp of the last gain update of this cell, to choose the latest updated cell
+        gain_update_ts_of_cell.assign(num_of_cells, gain_update_ts);
         auto increase_gain_of_cell = [&](cell_t cell, gain_t gain_change) {
             if (gain_change == 0) return;
             if (group_of_cell[cell] == 0) {
@@ -262,11 +284,11 @@ Solution fiduccia_mattheyses() {
         // pick the cell with the maximum gain and move it to the other group, then update the gain of the affected cells, repeat until every cell has been moved once
         size_t cut_size = iteration_min_cut_size;
         size_t min_cut_size = iteration_min_cut_size;
-        vector<cell_t> cell_of_picked_No; // the cell index of the cell picked at each step, in order
+        cell_of_picked_No.clear();
         cell_of_picked_No.reserve(num_of_cells);
         size_t picked_No_after_min_cut = 0; // {cut 5} {pick cell 1} {cut 2} {pick cell 0} {cut 6}, in this case picked_No_after_min_cut = 1
         size_t unlocked_group0_size = group0_size; // the number of unlocked cells in group 0
-        vector<bool> locked_of_cell(num_of_cells, false); // cell index -> {0: unlocked, 1: locked}
+        locked_of_cell.assign(num_of_cells, false);
         for (size_t num_of_unlocked_cells = num_of_cells; num_of_unlocked_cells;) {
             LOG(DEBUG) << "---------------------------------- move " << num_of_cells - num_of_unlocked_cells + 1
                 << "th cell ----------------------------------" << endl;

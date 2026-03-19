@@ -425,12 +425,12 @@ Solution fiduccia_mattheyses() {
         LOG(INFO) << "\nmin_cut_size = " << min_cut_size << " after " 
             << picked_No_after_min_cut << " cells moved" << endl;
         LOG(DEBUG) << "order of picked cells: ";
-        RUN(DEBUG) for (size_t i = 0; i < num_of_cells; i++) {
+        RUN(DEBUG) for (size_t i = 0; i < cell_of_picked_No.size(); i++) {
             LOG(DEBUG) << name_of_cell[cell_of_picked_No[i]] << " ";
         }
         LOG(DEBUG) << endl;
         // trace back to the state with min cut size
-        for (size_t i = picked_No_after_min_cut; i < num_of_cells; i++) {
+        for (size_t i = cell_of_picked_No.size(); i --> picked_No_after_min_cut;) {
             cell_t cell = cell_of_picked_No[i];
             group_of_cell[cell] = !group_of_cell[cell];
             if (group_of_cell[cell] == 0) {

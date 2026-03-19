@@ -27,10 +27,14 @@ constexpr LogLevel LOG_LEVEL = INFO;
 #define RUN(level) if (level > LOG_LEVEL) {} else
 #define LOG(level) RUN(level) std::cout
 
+typedef uint64_t cell_t; // cell index type
+typedef uint64_t net_t; // net index type
+typedef int64_t gain_t; // gain type
+
 struct Solution {
     size_t cut_size;
-    vector<size_t> group0_cells;
-    vector<size_t> group1_cells;
+    vector<cell_t> group0_cells;
+    vector<cell_t> group1_cells;
 };
 
 double balance_degree;
@@ -39,16 +43,16 @@ size_t num_of_nets = 0;
 size_t num_of_cells = 0;
 vector<string> name_of_net; // net index -> net name
 vector<string> name_of_cell; // cell index -> cell name
-vector<vector<size_t>> cells_of_net; // net index -> cell indices
-vector<vector<size_t>> nets_of_cell; // cell index -> net indices
-unordered_map<string, size_t> index_of_cell_name; // cell name -> cell index
-unordered_map<string, size_t> index_of_net_name; // net name -> net index
+vector<vector<cell_t>> cells_of_net; // net index -> cell indices
+vector<vector<net_t>> nets_of_cell; // cell index -> net indices
+unordered_map<string, cell_t> index_of_cell_name; // cell name -> cell index
+unordered_map<string, net_t> index_of_net_name; // net name -> net index
 
-size_t get_cut_size(const vector<vector<size_t>> cells_of_net, const vector<size_t> cell_count_in_group0_of_net) {
+size_t get_cut_size(const vector<vector<cell_t>> cells_of_net, const vector<net_t> cell_count_in_group0_of_net) {
     size_t cut_size = 0;
-    for (size_t i = 0; i < cells_of_net.size(); i++) {
-        if (cell_count_in_group0_of_net[i] != 0 
-        && cell_count_in_group0_of_net[i] != cells_of_net[i].size()) 
+    for (net_t net = 0; net < cells_of_net.size(); net++) {
+        if (cell_count_in_group0_of_net[net] != 0 
+        && cell_count_in_group0_of_net[net] != cells_of_net[net].size()) 
             cut_size++;
     }
     return cut_size;
@@ -78,7 +82,7 @@ int main(int argc, char* argv[]) {
     string tmp;
     while (input_file >> tmp) {
         input_file >> tmp;
-        const size_t net_index = num_of_nets++;
+        const net_t net_index = num_of_nets++;
         index_of_net_name[tmp] = net_index;
         name_of_net.push_back(tmp);
         cells_of_net.push_back({});
@@ -86,7 +90,7 @@ int main(int argc, char* argv[]) {
             input_file >> tmp;
             if (tmp == ";") break;
 
-            size_t cell_index;
+            cell_t cell_index;
             if (index_of_cell_name.find(tmp) == index_of_cell_name.end()) {
                 cell_index = num_of_cells++;
                 name_of_cell.push_back(tmp);
@@ -102,21 +106,21 @@ int main(int argc, char* argv[]) {
 
     LOG(INFO) << "balance_degree: " << balance_degree << endl;
     LOG(INFO) << "\nnum_of_nets: " << num_of_nets << endl;
-    for (size_t i = 0; i < num_of_nets; ++i) {
-        LOG(DEBUG) << index_of_net_name[name_of_net[i]] << ":" << name_of_net[i] << "{";
-        for (size_t j = 0; j < cells_of_net[i].size(); ++j) {
+    for (net_t net = 0; net < num_of_nets; ++net) {
+        LOG(DEBUG) << index_of_net_name[name_of_net[net]] << ":" << name_of_net[net] << "{";
+        for (size_t j = 0; j < cells_of_net[net].size(); ++j) {
             if (j) { LOG(DEBUG) << " "; }
-            LOG(DEBUG) << name_of_cell[cells_of_net[i][j]];
+            LOG(DEBUG) << name_of_cell[cells_of_net[net][j]];
         }
         LOG(DEBUG) << "} ";
     }
     LOG(DEBUG) << endl;
     LOG(INFO) << "\nnum_of_cells: " << num_of_cells << endl;
-    for (size_t j = 0; j < num_of_cells; ++j) {
-        LOG(DEBUG) << index_of_cell_name[name_of_cell[j]] << ":" << name_of_cell[j] << "{";
-        for (size_t i = 0; i < nets_of_cell[j].size(); ++i) {
+    for (cell_t cell = 0; cell < num_of_cells; ++cell) {
+        LOG(DEBUG) << index_of_cell_name[name_of_cell[cell]] << ":" << name_of_cell[cell] << "{";
+        for (size_t i = 0; i < nets_of_cell[cell].size(); ++i) {
             if (i) { LOG(DEBUG) << " "; }
-            LOG(DEBUG) << name_of_net[nets_of_cell[j][i]];
+            LOG(DEBUG) << name_of_net[nets_of_cell[cell][i]];
         }
         LOG(DEBUG) << "} ";
     }
@@ -147,28 +151,28 @@ int main(int argc, char* argv[]) {
 Solution fiduccia_mattheyses() {
     vector<bool> group_of_cell(num_of_cells); // cell index -> group index (0 or 1)
     vector<size_t> cell_count_in_group0_of_net(num_of_nets, 0); // net index -> number of cells in group 0 connected to this net
-    auto cell_count_in_group1_of_net = [&](size_t net_index) {
-        return cells_of_net[net_index].size() - cell_count_in_group0_of_net[net_index]; 
+    auto cell_count_in_group1_of_net = [&](net_t net) {
+        return cells_of_net[net].size() - cell_count_in_group0_of_net[net]; 
     };
     size_t group0_size = num_of_cells / 2;
     auto group1_size = [&]() { return num_of_cells - group0_size; };
-    for (size_t i = 0; i < num_of_cells; i++) {
-        group_of_cell[i] = i * 2 < num_of_cells;
-        if (group_of_cell[i] == 0) {
-            for (size_t j = 0; j < nets_of_cell[i].size(); j++) {
-                cell_count_in_group0_of_net[nets_of_cell[i][j]]++;
+    for (cell_t cell = 0; cell < num_of_cells; cell++) {
+        group_of_cell[cell] = cell * 2 < num_of_cells;
+        if (group_of_cell[cell] == 0) {
+            for (size_t j = 0; j < nets_of_cell[cell].size(); j++) {
+                cell_count_in_group0_of_net[nets_of_cell[cell][j]]++;
             }
         }
     }
     
     LOG(INFO) << "\ngroup0_size " << group0_size << " group1_size " << group1_size() << endl;
     LOG(DEBUG) << "\n<cell_name>:<group_index> " << endl;
-    for (size_t cell = 0; cell < num_of_cells; cell++) {
+    for (cell_t cell = 0; cell < num_of_cells; cell++) {
         LOG(DEBUG) << name_of_cell[cell] << ":" << group_of_cell[cell] << " ";
     }
     LOG(DEBUG) << endl;
     LOG(DEBUG) << "\n<net_name>:<group 0 cell count>/<group 1 cell count> " << endl;
-    for (size_t net = 0; net < num_of_nets; net++) {
+    for (net_t net = 0; net < num_of_nets; net++) {
         LOG(DEBUG) << name_of_net[net] << ":" << cell_count_in_group0_of_net[net] 
             << "/" << cell_count_in_group1_of_net(net) << " ";
     }
@@ -180,19 +184,19 @@ Solution fiduccia_mattheyses() {
         LOG(INFO) << "\n================================ iteration " << iter + 1 
             << " ================================" << endl;
 
-        int64_t group0_max_gain = INT64_MIN;
-        int64_t group1_max_gain = INT64_MIN;
-        const int64_t MAX_GAIN = num_of_nets; // the maximum gain of a cell is when all its nets are cut nets and it moves to the other group, then all its nets become uncut nets, gain = number of nets connected to this cell <= num_of_nets
-        vector<list<size_t>> group0_cells_of_offset_gain(2 * MAX_GAIN + 1); // gain -> list of cell indices in group 0 with this gain, offset by num_of_nets to allow negative gain
-        vector<list<size_t>> group1_cells_of_offset_gain(2 * MAX_GAIN + 1); // gain -> list of cell indices in group 1 with this gain, offset by num_of_nets to allow negative gain
-        auto group0_cells_of_gain = [&](size_t gain) -> list<size_t>& { return group0_cells_of_offset_gain[gain + MAX_GAIN]; };
-        auto group1_cells_of_gain = [&](size_t gain) -> list<size_t>& { return group1_cells_of_offset_gain[gain + MAX_GAIN]; };
-        vector<list<size_t>::iterator> iterator_of_cell(num_of_cells); // cell index -> iterator to the cell's position in cells_of_gain
-        vector<int64_t> gain_of_cell(num_of_cells); // cell index -> gain of this cell
-        for (size_t cell = 0; cell < num_of_cells; cell++) {
-            int64_t gain = 0;
+        gain_t group0_max_gain = INT64_MIN;
+        gain_t group1_max_gain = INT64_MIN;
+        const gain_t MAX_GAIN = num_of_nets; // the maximum gain of a cell is when all its nets are cut nets and it moves to the other group, then all its nets become uncut nets, gain = number of nets connected to this cell <= num_of_nets
+        vector<list<cell_t>> group0_cells_of_offset_gain(2 * MAX_GAIN + 1); // gain -> list of cell indices in group 0 with this gain, offset by num_of_nets to allow negative gain
+        vector<list<cell_t>> group1_cells_of_offset_gain(2 * MAX_GAIN + 1); // gain -> list of cell indices in group 1 with this gain, offset by num_of_nets to allow negative gain
+        auto group0_cells_of_gain = [&](gain_t gain) -> list<cell_t>& { return group0_cells_of_offset_gain[gain + MAX_GAIN]; };
+        auto group1_cells_of_gain = [&](gain_t gain) -> list<cell_t>& { return group1_cells_of_offset_gain[gain + MAX_GAIN]; };
+        vector<list<cell_t>::iterator> iterator_of_cell(num_of_cells); // cell index -> iterator to the cell's position in cells_of_gain
+        vector<gain_t> gain_of_cell(num_of_cells); // cell index -> gain of this cell
+        for (cell_t cell = 0; cell < num_of_cells; cell++) {
+            gain_t gain = 0;
             for (size_t j = 0; j < nets_of_cell[cell].size(); j++) {
-                const size_t net = nets_of_cell[cell][j];
+                const net_t net = nets_of_cell[cell][j];
                 if (group_of_cell[cell] == 0) { // cell i at group 0, try to move it to group 1
                     if (cell_count_in_group0_of_net[net] == 1) gain++;
                     else if (cell_count_in_group0_of_net[net] == cells_of_net[net].size()) gain--;
@@ -216,7 +220,7 @@ Solution fiduccia_mattheyses() {
         RUN(DEBUG) {
             LOG(DEBUG) << "group0 gain table: " << endl;
             size_t cell_count = group0_size;
-            for (int64_t gain = group0_max_gain; cell_count; gain--) {
+            for (gain_t gain = group0_max_gain; cell_count; gain--) {
                 LOG(DEBUG) << "gain " << gain << ": ";
                 for (auto cell : group0_cells_of_gain(gain)) { 
                     LOG(DEBUG) << name_of_cell[cell] << " ";
@@ -226,7 +230,7 @@ Solution fiduccia_mattheyses() {
             }
             LOG(DEBUG) << "group1 gain table: " << endl;
             cell_count = group1_size();
-            for (int64_t gain = group1_max_gain; cell_count; gain--) {
+            for (gain_t gain = group1_max_gain; cell_count; gain--) {
                 LOG(DEBUG) << "gain " << gain << ": ";
                 for (auto cell : group1_cells_of_gain(gain)) { 
                     LOG(DEBUG) << name_of_cell[cell] << " ";
@@ -239,7 +243,7 @@ Solution fiduccia_mattheyses() {
         // pick the cell with the maximum gain and move it to the other group, then update the gain of the affected cells, repeat until every cell has been moved once
         size_t cut_size = iteration_min_cut_size;
         size_t min_cut_size = iteration_min_cut_size;
-        vector<size_t> cell_of_picked_No; // the cell index of the cell picked at each step, in order
+        vector<cell_t> cell_of_picked_No; // the cell index of the cell picked at each step, in order
         cell_of_picked_No.reserve(num_of_cells);
         size_t picked_No_after_min_cut = 0; // {cut 5} {pick cell 1} {cut 2} {pick cell 0} {cut 6}, in this case picked_No_after_min_cut = 1
         size_t unlocked_group0_size = group0_size; // the number of unlocked cells in group 0
@@ -253,7 +257,7 @@ Solution fiduccia_mattheyses() {
             const bool permit_group_0_to_1 = group0_size - 1 >= (1 - balance_degree) / 2 * num_of_cells;
         
             // pick a cell to move
-            size_t cell_to_move;
+            cell_t cell_to_move;
             if (!permit_group_1_to_0 && !permit_group_0_to_1) {
                 // WIP
                 LOG(FETAL) << "Error: balance_degree is too large, cannot satisfy the balance constraint." << endl;
@@ -292,7 +296,7 @@ Solution fiduccia_mattheyses() {
         
             // update the gain of the affected cells
             for (size_t i = 0; i < nets_of_cell[cell_to_move].size(); i++) {
-                size_t net = nets_of_cell[cell_to_move][i];
+                net_t net = nets_of_cell[cell_to_move][i];
                 bool from_1_to_0 = group_of_cell[cell_to_move], from_0_to_1 = !from_1_to_0;
                 bool become_pair = (from_0_to_1 && cell_count_in_group1_of_net(net) == 1)
                                 || (from_1_to_0 && cell_count_in_group0_of_net[net] == 1);
@@ -315,7 +319,7 @@ Solution fiduccia_mattheyses() {
                     << (escape_empty ? "escape_empty " : "");
         
                 for (size_t j = 0; j < cells_of_net[net].size(); j++) {
-                    size_t cell = cells_of_net[net][j];
+                    cell_t cell = cells_of_net[net][j];
                     if (cell == cell_to_move || locked_of_cell[cell]) continue;
         
                     int gain_change = 0;
@@ -387,7 +391,7 @@ Solution fiduccia_mattheyses() {
             RUN(TRACE) {
                 LOG(TRACE) << "group0 gain table: " << endl;
                 size_t cell_count = unlocked_group0_size;
-                for (int64_t gain = group0_max_gain; cell_count; gain--) {
+                for (gain_t gain = group0_max_gain; cell_count; gain--) {
                     LOG(TRACE) << "gain " << gain << ": ";
                     for (auto cell : group0_cells_of_gain(gain)) { 
                         LOG(TRACE) << name_of_cell[cell] << " ";
@@ -397,7 +401,7 @@ Solution fiduccia_mattheyses() {
                 }
                 LOG(TRACE) << "group1 gain table: " << endl;
                 cell_count = unlocked_group1_size();
-                for (int64_t gain = group1_max_gain; cell_count; gain--) {
+                for (gain_t gain = group1_max_gain; cell_count; gain--) {
                     LOG(TRACE) << "gain " << gain << ": ";
                     for (auto cell : group1_cells_of_gain(gain)) { 
                         LOG(TRACE) << name_of_cell[cell] << " ";
@@ -417,7 +421,7 @@ Solution fiduccia_mattheyses() {
         LOG(DEBUG) << endl;
         // trace back to the state with min cut size
         for (size_t i = picked_No_after_min_cut; i < num_of_cells; i++) {
-            size_t cell = cell_of_picked_No[i];
+            cell_t cell = cell_of_picked_No[i];
             group_of_cell[cell] = !group_of_cell[cell];
             if (group_of_cell[cell] == 0) {
                 group0_size++;
@@ -436,7 +440,7 @@ Solution fiduccia_mattheyses() {
 
         LOG(INFO) << "after trace back: group0_size " << group0_size << " group1_size " 
             << group1_size() << endl;
-        for (size_t cell = 0; cell < num_of_cells; cell++) {
+        for (cell_t cell = 0; cell < num_of_cells; cell++) {
             LOG(DEBUG) << name_of_cell[cell] << ":" << group_of_cell[cell] << " ";
         }
         LOG(DEBUG) << endl;
@@ -451,7 +455,7 @@ Solution fiduccia_mattheyses() {
 
     Solution solution;
     solution.cut_size = get_cut_size(cells_of_net, cell_count_in_group0_of_net);
-    for (size_t cell = 0; cell < num_of_cells; cell++) {
+    for (cell_t cell = 0; cell < num_of_cells; cell++) {
         if (group_of_cell[cell] == 0) solution.group0_cells.push_back(cell);
         else solution.group1_cells.push_back(cell);
     }

@@ -1,5 +1,0 @@
-Cutsize = 3
-G1 10
-c6 c5 c25 c12 c16 c2 c24 c11 c17 c8 ;
-G2 18
-c23 c21 c13 c15 c1 c10 c4 c29 c14 c9 c20 c27 c30 c3 c18 c26 c19 c22 ;

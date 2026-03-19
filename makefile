@@ -37,4 +37,4 @@ run_all: bin/$(EXECUTABLE)
 	rm -f time_*.tmp
 
 clean:
-	rm -rf src/*.o bin
+	rm -rf src/*.o testcase/output_*.dat bin

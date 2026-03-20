@@ -225,7 +225,7 @@ Solution fiduccia_mattheyses() {
                 const net_t net = nets_of_cell[cell][j];
                 size_t cell_count = cell_count_of_net_by_group[net][group];
                 if (cell_count == 1) gain++;
-                else if (cell_count == cells_of_net[net].size()) gain--;
+                if (cell_count == cells_of_net[net].size()) gain--;
             }
             cells_of_group_by_gain(group, gain).push_front(cell);
             iterator_of_cell[cell] = cells_of_group_by_gain(group, gain).begin();

@@ -40,4 +40,4 @@ run_all: bin/$(EXECUTABLE)
 	rm -f time_*.tmp
 
 clean:
-	rm -rf src/*.o testcase/output_*.dat bin
+	rm -rf src/*.o testcase/output_*.dat testcase/result_.txt bin

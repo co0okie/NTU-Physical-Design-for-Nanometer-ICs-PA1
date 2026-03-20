@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cassert>
 #include <array>
+#include <set>
 
 #define BEGIN_END(container) (container).begin(), (container).end()
 
@@ -95,26 +96,30 @@ int main(int argc, char* argv[]) {
     string tmp;
     while (input_file >> tmp) {
         input_file >> tmp;
-        const net_t net_index = num_of_nets++;
-        index_of_net_name[tmp] = net_index;
+        const net_t net = num_of_nets++;
+        index_of_net_name[tmp] = net;
         name_of_net.push_back(tmp);
-        cells_of_net.push_back({});
+        std::set<cell_t> cells_in_this_net; // to avoid duplicate cells in a net
         for (;;) {
             input_file >> tmp;
             if (tmp == ";") break;
 
-            cell_t cell_index;
+            cell_t cell;
             if (index_of_cell_name.find(tmp) == index_of_cell_name.end()) {
-                cell_index = num_of_cells++;
+                cell = num_of_cells++;
                 name_of_cell.push_back(tmp);
-                index_of_cell_name[tmp] = cell_index;
+                index_of_cell_name[tmp] = cell;
                 nets_of_cell.push_back({});
             } else {
-                cell_index = index_of_cell_name[tmp];
+                cell = index_of_cell_name[tmp];
             }
-            cells_of_net[net_index].push_back(cell_index);
-            nets_of_cell[cell_index].push_back(net_index);
+            auto result = cells_in_this_net.insert(cell);
+            if (result.second) {
+                // new cell in this net
+                nets_of_cell[cell].push_back(net);
+            }
         }
+        cells_of_net.emplace_back(BEGIN_END(cells_in_this_net));
     }
 
     gain_offset = std::max_element(BEGIN_END(nets_of_cell), [](const vector<net_t>& a, const vector<net_t>& b) {
@@ -129,7 +134,7 @@ int main(int argc, char* argv[]) {
             if (j) { LOG(DEBUG) << " "; }
             LOG(DEBUG) << name_of_cell[cells_of_net[net][j]];
         }
-        LOG(DEBUG) << "} ";
+        LOG(DEBUG) << "}\n";
     }
     LOG(DEBUG) << endl;
     LOG(INFO) << "\nnum_of_cells: " << num_of_cells << endl;
@@ -139,7 +144,7 @@ int main(int argc, char* argv[]) {
             if (i) { LOG(DEBUG) << " "; }
             LOG(DEBUG) << name_of_net[nets_of_cell[cell][i]];
         }
-        LOG(DEBUG) << "} ";
+        LOG(DEBUG) << "}\n";
     }
     LOG(DEBUG) << endl;
 

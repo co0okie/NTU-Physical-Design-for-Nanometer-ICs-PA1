@@ -29,10 +29,10 @@ constexpr LogLevel LOG_LEVEL = INFO;
 #define RUN(level) if (level > LOG_LEVEL) {} else
 #define LOG(level) RUN(level) std::cout
 
-typedef uint64_t cell_t; // cell index type
-typedef uint64_t net_t; // net index type
-typedef int64_t gain_t; // gain type
-constexpr gain_t MIN_GAIN = INT64_MIN;
+typedef int32_t cell_t; // cell index type
+typedef int32_t net_t; // net index type
+typedef int32_t gain_t; // gain type
+constexpr gain_t MIN_GAIN = INT32_MIN;
 
 struct Solution {
     size_t cut_size;
@@ -47,7 +47,6 @@ size_t num_of_cells = 0;
 vector<string> name_of_cell; // cell -> cell name
 vector<vector<net_t>> nets_of_cell; // cell index -> net indices
 vector<bool> group_of_cell; // cell -> group index (0 or 1)
-vector<list<cell_t>::iterator> iterator_of_cell; // cell -> iterator to the cell's position in cells_of_gain
 vector<gain_t> gain_of_cell; // cell -> gain of this cell
 vector<uint32_t> gain_update_ts_of_cell; // cell -> timestamp of the last gain update of this cell, to choose the latest updated cell
 vector<bool> locked_of_cell; // cell -> {0: unlocked, 1: locked}
@@ -58,8 +57,13 @@ vector<array<size_t, 2>> cell_count_of_net_by_group; // net -> group -> number o
 
 unordered_map<string, cell_t> index_of_cell_name; // cell name -> cell index
 unordered_map<string, net_t> index_of_net_name; // net name -> net index
-array<vector<list<cell_t>>, 2> cells_of_group_by_offset_gain; // group -> gain -> list of cell indices in this group with this gain, offset by num_of_nets to allow negative gain
 vector<cell_t> cell_of_picked_No; // cell picked order sequence -> cell index
+
+array<vector<cell_t>, 2> head_cell_of_group_by_offset_gain; // group -> gain -> gain list head cell with this gain in this group
+vector<cell_t> prev_of_cell; // cell -> previous cell in the same gain list
+vector<cell_t> next_of_cell; // cell -> next cell in the same gain list
+
+uint32_t gain_update_ts;
 
 gain_t gain_offset = 0;
 
@@ -73,6 +77,31 @@ size_t get_cut_size() {
 }
 
 Solution fiduccia_mattheyses();
+
+cell_t& head_cell_of_group_by_gain(bool group, gain_t gain) {
+    return head_cell_of_group_by_offset_gain[group][gain + gain_offset];
+}
+
+void push_cell_to_front_of_gain(cell_t cell, gain_t gain, bool group) {
+    cell_t head_cell = head_cell_of_group_by_gain(group, gain);
+    prev_of_cell[cell] = -1;
+    next_of_cell[cell] = head_cell;
+    if (head_cell != -1) prev_of_cell[head_cell] = cell;
+    head_cell_of_group_by_gain(group, gain) = cell;
+    gain_update_ts_of_cell[cell] = gain_update_ts;
+}
+
+void erase_cell_of_gain(cell_t cell, gain_t gain, bool group) {
+    cell_t p = prev_of_cell[cell], n = next_of_cell[cell];
+    if (p != -1) {
+        next_of_cell[p] = n;
+    } else {
+        head_cell_of_group_by_gain(group, gain) = n;
+    }
+    if (n != -1) prev_of_cell[n] = p;
+    prev_of_cell[cell] = -1;
+    next_of_cell[cell] = -1;
+}
 
 int main(int argc, char* argv[]) {
     if (argc != 3) {
@@ -198,23 +227,20 @@ Solution fiduccia_mattheyses() {
             << " ================================" << endl;
 
         array<gain_t, 2> max_gain_of_group = {MIN_GAIN, MIN_GAIN}; // group -> max gain of the cells in this group
-        cells_of_group_by_offset_gain[0].assign(2 * gain_offset + 1, list<cell_t>());
-        cells_of_group_by_offset_gain[1].assign(2 * gain_offset + 1, list<cell_t>());
-        auto cells_of_group_by_gain = [&](bool group, gain_t gain) -> list<cell_t>& {
-            return cells_of_group_by_offset_gain[group][gain + gain_offset];
-        };
-        iterator_of_cell.resize(num_of_cells);
+        head_cell_of_group_by_offset_gain[0].assign(2 * gain_offset + 1, -1);
+        head_cell_of_group_by_offset_gain[1].assign(2 * gain_offset + 1, -1);
+        prev_of_cell.assign(num_of_cells, -1);
+        next_of_cell.assign(num_of_cells, -1);
         gain_of_cell.resize(num_of_cells);
-        uint32_t gain_update_ts = 0;
+        gain_update_ts = 0;
         gain_update_ts_of_cell.assign(num_of_cells, gain_update_ts);
         auto increase_gain_of_cell = [&](cell_t cell, gain_t gain_change) {
             if (gain_change == 0) return;
             bool group = group_of_cell[cell];
             gain_t old_gain = gain_of_cell[cell], new_gain = old_gain + gain_change;
-            cells_of_group_by_gain(group, old_gain).erase(iterator_of_cell[cell]);
+            erase_cell_of_gain(cell, old_gain, group);
             gain_of_cell[cell] = new_gain;
-            cells_of_group_by_gain(group, new_gain).push_front(cell);
-            iterator_of_cell[cell] = cells_of_group_by_gain(group, new_gain).begin();
+            push_cell_to_front_of_gain(cell, new_gain, group);
             max_gain_of_group[group] = max(max_gain_of_group[group], new_gain);
             gain_update_ts_of_cell[cell] = gain_update_ts;
         };
@@ -227,8 +253,7 @@ Solution fiduccia_mattheyses() {
                 if (cell_count == 1) gain++;
                 if (cell_count == cells_of_net[net].size()) gain--;
             }
-            cells_of_group_by_gain(group, gain).push_front(cell);
-            iterator_of_cell[cell] = cells_of_group_by_gain(group, gain).begin();
+            push_cell_to_front_of_gain(cell, gain, group);
             max_gain_of_group[group] = max(max_gain_of_group[group], gain);
             gain_of_cell[cell] = gain;
         }
@@ -239,7 +264,7 @@ Solution fiduccia_mattheyses() {
                 size_t cell_count = size_of_group[group];
                 for (gain_t gain = max_gain_of_group[group]; cell_count; gain--) {
                     LOG(DEBUG) << "gain " << gain << ": ";
-                    for (auto cell : cells_of_group_by_gain(group, gain)) { 
+                    for (cell_t cell = head_cell_of_group_by_gain(group, gain); cell != -1; cell = next_of_cell[cell]) { 
                         LOG(DEBUG) << name_of_cell[cell] << " ";
                         cell_count--;
                     }
@@ -277,21 +302,21 @@ Solution fiduccia_mattheyses() {
                     break;
                 }
                 LOG(DEBUG) << "group 0 too small, pick a cell in group 1" << endl;
-                while (cells_of_group_by_gain(1, max_gain_of_group[1]).empty()) max_gain_of_group[1]--;
-                cell_to_move = cells_of_group_by_gain(1, max_gain_of_group[1]).front();
+                while (head_cell_of_group_by_gain(1, max_gain_of_group[1]) == -1) max_gain_of_group[1]--;
+                cell_to_move = head_cell_of_group_by_gain(1, max_gain_of_group[1]);
             } else if (!permit_group_1_to_0 || unlocked_size_of_group[1] == 0) { // pick a cell in group 0
                 if (unlocked_size_of_group[0] == 0) { // no cell to pick
                     LOG(INFO) << "Fail to find a cell in group 0, ending the loop." << endl;
                     break;
                 }
                 LOG(DEBUG) << "group 1 too small, pick a cell in group 0" << endl;
-                while (cells_of_group_by_gain(0, max_gain_of_group[0]).empty()) max_gain_of_group[0]--;
-                cell_to_move = cells_of_group_by_gain(0, max_gain_of_group[0]).front();
+                while (head_cell_of_group_by_gain(0, max_gain_of_group[0]) == -1) max_gain_of_group[0]--;
+                cell_to_move = head_cell_of_group_by_gain(0, max_gain_of_group[0]);
             } else { // pick a cell in either group
-                while (cells_of_group_by_gain(0, max_gain_of_group[0]).empty()) max_gain_of_group[0]--;
-                while (cells_of_group_by_gain(1, max_gain_of_group[1]).empty()) max_gain_of_group[1]--;
-                cell_t cell0 = cells_of_group_by_gain(0, max_gain_of_group[0]).front();
-                cell_t cell1 = cells_of_group_by_gain(1, max_gain_of_group[1]).front();
+                while (head_cell_of_group_by_gain(0, max_gain_of_group[0]) == -1) max_gain_of_group[0]--;
+                while (head_cell_of_group_by_gain(1, max_gain_of_group[1]) == -1) max_gain_of_group[1]--;
+                cell_t cell0 = head_cell_of_group_by_gain(0, max_gain_of_group[0]);
+                cell_t cell1 = head_cell_of_group_by_gain(1, max_gain_of_group[1]);
                 if (max_gain_of_group[0] == max_gain_of_group[1]) {
                     cell_to_move = (gain_update_ts_of_cell[cell0] >= gain_update_ts_of_cell[cell1]) ? cell0 : cell1;
                 } else {
@@ -351,7 +376,7 @@ Solution fiduccia_mattheyses() {
             gain_t gain = gain_of_cell[cell_to_move];
             unlocked_size_of_group[old_group]--;
             size_of_group[old_group]--;
-            cells_of_group_by_gain(old_group, gain).erase(iterator_of_cell[cell_to_move]);
+            erase_cell_of_gain(cell_to_move, gain, old_group);
             group_of_cell[cell_to_move] = new_group;
             size_of_group[new_group]++;
             for (auto net : nets_of_cell[cell_to_move]) {
@@ -372,7 +397,7 @@ Solution fiduccia_mattheyses() {
                     size_t cell_count = unlocked_size_of_group[group];
                     for (gain_t gain = max_gain_of_group[group]; cell_count; gain--) {
                         LOG(TRACE) << "gain " << gain << ": ";
-                        for (auto cell : cells_of_group_by_gain(group, gain)) { 
+                        for (cell_t cell = head_cell_of_group_by_gain(group, gain); cell != -1; cell = next_of_cell[cell]) { 
                             LOG(TRACE) << name_of_cell[cell] << " ";
                             cell_count--;
                         }

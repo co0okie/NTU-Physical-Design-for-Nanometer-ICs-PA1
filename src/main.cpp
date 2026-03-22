@@ -9,6 +9,8 @@
 #include <cassert>
 #include <array>
 #include <set>
+#include <chrono>
+#include <numeric>
 
 #define BEGIN_END(container) (container).begin(), (container).end()
 
@@ -26,13 +28,15 @@ enum LogLevel {
 };
 constexpr LogLevel LOG_LEVEL = INFO;
 
-#define RUN(level) if (level > LOG_LEVEL) {} else
-#define LOG(level) RUN(level) std::cout
+constexpr double time_limit_seconds = 60.0;
 
 typedef int32_t cell_t; // cell index type
 typedef int32_t net_t; // net index type
 typedef int32_t gain_t; // gain type
 constexpr gain_t MIN_GAIN = INT32_MIN;
+
+#define RUN(level) if (level > LOG_LEVEL) {} else
+#define LOG(level) RUN(level) std::cout
 
 struct Solution {
     size_t cut_size;
@@ -67,7 +71,7 @@ uint32_t gain_update_ts;
 
 gain_t gain_offset = 0;
 
-array<size_t, 2> size_of_group;
+array<size_t, 2> size_of_group; // group -> number of cells in this group
 array<gain_t, 2> max_gain_of_group;
 
 size_t get_cut_size() {
@@ -168,9 +172,24 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    auto solution = fiduccia_mattheyses();
+    Solution best_global_solution;
+    best_global_solution.cut_size = SIZE_MAX;
+
+    auto start_time = std::chrono::high_resolution_clock::now();
+
+    for (int i = 0; i < 10; i++) {
+        auto solution = fiduccia_mattheyses();
+
+        if (solution.cut_size < best_global_solution.cut_size) {
+            best_global_solution = solution;
+        }
+
+        auto current_time = std::chrono::high_resolution_clock::now();
+        std::chrono::duration<double> elapsed = current_time - start_time;
+        if (elapsed.count() > time_limit_seconds) break;
+    }
     
-    write_output(output_file, solution);
+    write_output(output_file, best_global_solution);
 
     return 0;    
 }
@@ -225,11 +244,18 @@ void write_output(ofstream& output_file, const Solution& solution) {
 Solution fiduccia_mattheyses() {
     group_of_cell.resize(num_of_cells);
     cell_count_of_net_by_group.assign(num_of_nets, {0, 0});
-    size_of_group = {num_of_cells / 2, num_of_cells - num_of_cells / 2}; // group -> number of cells in this group
+    size_of_group = {0, 0};
+
+    std::vector<size_t> random_cells(num_of_cells);
+    std::iota(BEGIN_END(random_cells), 0);
+    std::random_shuffle(BEGIN_END(random_cells));
+    
     for (cell_t cell = 0; cell < num_of_cells; cell++) {
-        group_of_cell[cell] = cell * 2 < num_of_cells;
+        bool group = random_cells[cell] < num_of_cells / 2;
+        group_of_cell[cell] = group;
+        size_of_group[group]++;
         for (net_t net : nets_of_cell[cell]) {
-            cell_count_of_net_by_group[net][group_of_cell[cell]]++;
+            cell_count_of_net_by_group[net][group]++;
         }
     }
     

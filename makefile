@@ -1,16 +1,16 @@
-CC=g++
-CFLAGS=-c -Wall
-LDFLAGS=-std=c++11 -O3 -lm
-SOURCES=src/main.cpp
+CXX=g++
+CXXFLAGS=-std=c++11 -O3 -Wall
+LDFLAGS=-lm
+SOURCES=src/main.cpp src/partition.cpp
 OBJECTS=$(SOURCES:.cpp=.o)
 EXECUTABLE=fm
-INCLUDES=
-INPUT=testcase/input_0.dat
+INCLUDES=src/partition.h
+# INPUT=testcase/input_0.dat
 # INPUT=testcase/input_1.dat
 # INPUT=testcase/input_2.dat
 # INPUT=testcase/input_3.dat
 # INPUT=testcase/input_4.dat
-# INPUT=testcase/input_5.dat
+INPUT=testcase/input_5.dat
 # INPUT=testcase/input_0.2_20_30.dat
 # INPUT=testcase/input_0.5_5_9.dat
 # INPUT=testcase/input_0.3_20_30.dat
@@ -21,10 +21,10 @@ all: bin/$(EXECUTABLE)
 
 bin/$(EXECUTABLE): $(OBJECTS)
 	mkdir -p $(@D)
-	$(CC) $(LDFLAGS) $^ -o $@
+	$(CXX) $(CXXFLAGS) $^ -o $@ $(LDFLAGS)
 
 %.o: %.cpp ${INCLUDES}
-	$(CC) $(CFLAGS) $< -o $@
+	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 run: bin/$(EXECUTABLE)
 	./$< '$(INPUT)' '$(OUTPUT)'
@@ -40,4 +40,4 @@ run_all: bin/$(EXECUTABLE)
 	rm -f time_*.tmp
 
 clean:
-	rm -rf src/*.o testcase/output_*.dat testcase/result_.txt bin
+	rm -rf src/*.o testcase/output_*.dat testcase/result_*.txt bin

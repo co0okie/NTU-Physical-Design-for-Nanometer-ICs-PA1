@@ -1,0 +1,39 @@
+#ifndef PARTITION_H
+#define PARTITION_H
+
+#include <cstdint>
+#include <vector>
+#include <set>
+#include <array>
+#include <string>
+#include <tuple>
+
+typedef int32_t cell_t; // cell index type
+typedef int32_t net_t; // net index type
+typedef int32_t gain_t; // gain type
+constexpr gain_t MIN_GAIN = INT32_MIN;
+
+struct PartitionInput {
+    double balance_degree;
+    std::vector<std::set<cell_t>> cells_of_net; // net -> cell indices
+
+    static std::tuple<
+        PartitionInput, 
+        std::vector<std::string> // name_of_cell: cell -> cell name
+    > from_file(const std::string& input_file);
+};
+
+struct PartitionOutput {
+    uint64_t cut_size;
+    std::array<std::vector<cell_t>, 2> cells_of_group; // group -> cell indices
+
+    void to_file(const std::string& output_file, const std::vector<std::string>& name_of_cell) const;
+};
+
+PartitionOutput partition(
+    const PartitionInput& input, 
+    uint32_t repeat = 1, 
+    double time_limit_seconds = 60 * 60
+);
+
+#endif

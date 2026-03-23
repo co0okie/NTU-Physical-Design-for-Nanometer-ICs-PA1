@@ -1,7 +1,7 @@
 #include <iostream>
 #include "partition.h"
 
-using std::cout, std::endl;
+using namespace std;
 
 int main(int argc, char* argv[]) {
     if (argc != 3) {

@@ -1,7 +1,7 @@
 CXX=g++
 CXXFLAGS=-std=c++11 -O3 -Wall
 LDFLAGS=-lm
-SOURCES=src/main.cpp src/partition.cpp
+SOURCES=src/main.cpp src/partition.cpp src/clusterning.cpp
 OBJECTS=$(SOURCES:.cpp=.o)
 EXECUTABLE=fm
 INCLUDES=src/partition.h
@@ -39,5 +39,12 @@ run_all: bin/$(EXECUTABLE)
 	done; \
 	rm -f time_*.tmp
 
+bin/test: src/test.o $(filter-out src/main.o, $(OBJECTS))
+	mkdir -p $(@D)
+	$(CXX) $(CXXFLAGS) $^ -o $@ $(LDFLAGS)
+
+test: bin/test
+	./$<
+
 clean:
-	rm -rf src/*.o testcase/output_*.dat testcase/result_*.txt bin
+	rm -rf src/*.o testcase/output_*.dat testcase/result_*.txt bin log a.out

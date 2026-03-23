@@ -8,11 +8,13 @@
 #include <algorithm>
 #include <cassert>
 #include <array>
-#include <set>
+#include <unordered_set>
 #include <chrono>
 #include <numeric>
 #include <exception>
+#include <random>
 #include "partition.h"
+#include "clusterning.h"
 
 using std::vector; 
 using std::string; 
@@ -22,13 +24,14 @@ using std::ifstream;
 using std::ofstream;
 using std::ostream;
 using std::unordered_map;
+using std::unordered_set;
 using std::list;
 using std::max;
 using std::min;
 using std::array;
 using std::chrono::high_resolution_clock;
 
-#define BEGIN_END(container) (container).begin(), (container).end()
+typedef std::chrono::high_resolution_clock::time_point time_point;
 
 enum LogLevel {
     QUIET = 0,
@@ -46,36 +49,44 @@ constexpr LogLevel LOG_LEVEL = INFO;
 
 class FiducciaMattheysesPartitioner {
 public:
-    FiducciaMattheysesPartitioner(const PartitionInput& input, uint32_t repeat, double time_limit_seconds);
+    FiducciaMattheysesPartitioner(
+        double _balance_degree, 
+        const vector<vector<cell_t>>& _cells_of_net, const vector<vector<net_t>>& _nets_of_cell,
+        const vector<bool>& _group_of_cell,
+        time_point _start_time, double _time_limit_seconds
+    );
     void solve();
-    PartitionOutput output;
+    uint64_t best_cut_size;
+    vector<bool> group_of_cell; // cell -> group index (0 or 1)
 
 private:
-    PartitionOutput fiduccia_mattheyses();
-    bool do_one_iteration(size_t& iteration_min_cut_size);
+    bool do_one_iteration(size_t& cut_size, size_t& iteration_min_cut_size);
     bool move_one_cell(size_t& cut_size, size_t& min_cut_size, size_t& picked_No_after_min_cut, 
         array<size_t, 2>& unlocked_size_of_group);
     
     size_t get_cut_size() const;
 
-    uint32_t repeat;
-    high_resolution_clock::time_point start_time;
-    double time_limit_seconds;
+    const time_point start_time;
+    const double time_limit_seconds;
 
-    double balance_degree;
+    const double balance_degree;
+    const double min_group_size;
+    const double max_group_size;
+    bool is_balanced() const {
+        return min_group_size <= size_of_group[0] && size_of_group[0] <= max_group_size;
+    }
 
-    gain_t gain_offset; // max possible gain = max number of nets connected to a cell
+    const gain_t gain_offset; // max possible gain = max number of nets connected to a cell
 
     size_t num_of_nets() { return cells_of_net.size(); }
     size_t num_of_cells() { return nets_of_cell.size(); }
 
-    vector<vector<cell_t>> cells_of_net; // net -> cell indices
-    vector<vector<net_t>> nets_of_cell; // cell -> net indices
+    const vector<vector<cell_t>>& cells_of_net; // net -> cell indices
+    const vector<vector<net_t>>& nets_of_cell; // cell -> net indices
 
     vector<cell_t> cell_of_picked_No; // cell picked order sequence -> cell index
     uint32_t gain_update_ts;
 
-    vector<bool> group_of_cell; // cell -> group index (0 or 1)
     vector<gain_t> gain_of_cell; // cell -> gain of this cell
     vector<uint32_t> gain_update_ts_of_cell; // cell -> timestamp of the last gain update of this cell, to choose the latest updated cell
     vector<bool> locked_of_cell; // cell -> {0: unlocked, 1: locked}
@@ -96,29 +107,78 @@ private:
     array<gain_t, 2> max_gain_of_group;
 };
 
-FiducciaMattheysesPartitioner::FiducciaMattheysesPartitioner(
-    const PartitionInput& input, uint32_t repeat, double time_limit_seconds
+PartitionOutput partition(
+    const PartitionInput& input, 
+    uint32_t repeat,
+    double time_limit_seconds
 ) {
-    this->repeat = repeat;
-    start_time = high_resolution_clock::now();
-    this->time_limit_seconds = time_limit_seconds;
-    balance_degree = input.balance_degree;
-    
-    gain_offset = 0;
+    auto start_time = high_resolution_clock::now();
+
+    vector<vector<cell_t>> cells_of_net;
+    vector<vector<net_t>> nets_of_cell;
+    cells_of_net.reserve(input.cells_of_net.size());
     for (net_t net = 0; net < input.cells_of_net.size(); net++) {
-        cells_of_net.push_back(vector<cell_t>(BEGIN_END(input.cells_of_net[net])));
+        cells_of_net.emplace_back(BEGIN_END(input.cells_of_net[net]));
         for (cell_t cell : cells_of_net[net]) {
             nets_of_cell.resize(max(nets_of_cell.size(), (size_t) cell + 1));
             nets_of_cell[cell].push_back(net);
         }
     }
 
-    gain_offset = std::max_element(BEGIN_END(nets_of_cell), [](const vector<net_t>& a, const vector<net_t>& b) {
-        return a.size() < b.size();
-    })->size();
+    LOG(INFO) << "before clustering: num_of_nets " << cells_of_net.size() 
+        << " num_of_cells " << nets_of_cell.size() << endl;
 
+    auto result = first_choice_clustering(cells_of_net, nets_of_cell);
+
+    LOG(INFO) << "after clustering: num_of_nets " << result.clusters_of_new_net.size() 
+        << " num_of_cells " << result.new_nets_of_cluster.size() << endl;
+
+    FiducciaMattheysesPartitioner cluster_partitioner(
+        input.balance_degree, 
+        result.clusters_of_new_net, result.new_nets_of_cluster, 
+        {}, // random initial partition
+        start_time, time_limit_seconds
+    );
+    cluster_partitioner.solve();
+
+    // declustering
+    auto& group_of_cluster = cluster_partitioner.group_of_cell;
+    vector<bool> group_of_cell(nets_of_cell.size());
+    for (cell_t cell = 0; cell < nets_of_cell.size(); cell++) {
+        group_of_cell[cell] = group_of_cluster[result.cluster_of_cell[cell]];
+    }
+
+    FiducciaMattheysesPartitioner cell_partitioner(
+        input.balance_degree, 
+        cells_of_net, nets_of_cell, 
+        group_of_cell, // initial partition from cluster partition result
+        start_time, time_limit_seconds
+    );
+    cell_partitioner.solve();
+
+    PartitionOutput output;
+    output.cut_size = cell_partitioner.best_cut_size;
+    for (cell_t cell = 0; cell < nets_of_cell.size(); cell++) {
+        output.cells_of_group[cell_partitioner.group_of_cell[cell]].push_back(cell);
+    }
+    return output;
+}
+
+FiducciaMattheysesPartitioner::FiducciaMattheysesPartitioner(
+    double _balance_degree, 
+    const vector<vector<cell_t>>& _cells_of_net, const vector<vector<net_t>>& _nets_of_cell,
+    const vector<bool>& _group_of_cell,
+    time_point _start_time, double _time_limit_seconds
+) : balance_degree(_balance_degree),
+    min_group_size((1 - _balance_degree) / 2 * _nets_of_cell.size()), 
+    max_group_size((1 + _balance_degree) / 2 * _nets_of_cell.size()),
+    cells_of_net(_cells_of_net), nets_of_cell(_nets_of_cell), 
+    start_time(_start_time), time_limit_seconds(_time_limit_seconds),
+    gain_offset(std::max_element(BEGIN_END(_nets_of_cell), [](const vector<net_t>& a, const vector<net_t>& b) {
+        return a.size() < b.size();
+    })->size()) 
+{
     cell_of_picked_No.reserve(num_of_cells());
-    group_of_cell.reserve(num_of_cells());
     gain_of_cell.reserve(num_of_cells());
     gain_update_ts_of_cell.reserve(num_of_cells());
     locked_of_cell.reserve(num_of_cells());
@@ -128,8 +188,8 @@ FiducciaMattheysesPartitioner::FiducciaMattheysesPartitioner(
     prev_of_cell.reserve(num_of_cells());
     next_of_cell.reserve(num_of_cells());
 
-
     LOG(INFO) << "balance_degree: " << balance_degree << endl;
+    LOG(INFO) << "\nmax possible gain: " << gain_offset << endl;
     LOG(INFO) << "\nnum_of_nets: " << num_of_nets() << endl;
     for (net_t net = 0; net < num_of_nets(); ++net) {
         LOG(DEBUG) << "n" << net << "{";
@@ -150,6 +210,24 @@ FiducciaMattheysesPartitioner::FiducciaMattheysesPartitioner(
         LOG(DEBUG) << "}\n";
     }
     LOG(DEBUG) << endl;
+    
+    if (_group_of_cell.size()) {
+        LOG(INFO) << "Use the given initial partition." << endl;
+        group_of_cell = _group_of_cell;
+    } else {
+        LOG(INFO) << "Use random initial partition." << endl;
+        group_of_cell.resize(num_of_cells());
+
+        std::vector<size_t> random_cells(num_of_cells());
+        std::iota(BEGIN_END(random_cells), 0);
+        std::random_device rd;
+        std::mt19937 g(rd());
+        std::shuffle(BEGIN_END(random_cells), g);
+        
+        for (cell_t cell = 0; cell < num_of_cells(); cell++) {
+            group_of_cell[cell] = random_cells[cell] < num_of_cells() / 2;
+        }
+    }
 }
 
 void FiducciaMattheysesPartitioner::solve() {
@@ -158,40 +236,10 @@ void FiducciaMattheysesPartitioner::solve() {
         exit(1);
     }
 
-    output.cut_size = get_cut_size();
-
-    for (uint32_t i = 0; i < repeat; i++) {
-        LOG(INFO) << "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX repeat " 
-            << i + 1 << " XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX" << endl;
-
-        auto solution = fiduccia_mattheyses();
-
-        if (solution.cut_size < output.cut_size) {
-            output = solution;
-        }
-
-        if (time_limit_seconds > 0) {
-            std::chrono::duration<double> elapsed = high_resolution_clock::now() - start_time;
-            if (elapsed.count() > time_limit_seconds) break;
-        }
-    }
-
-    if (repeat > 1)
-        LOG(INFO) << "\nfinal cut size: " << output.cut_size << endl;
-}
-
-PartitionOutput FiducciaMattheysesPartitioner::fiduccia_mattheyses() {
-    group_of_cell.resize(num_of_cells());
     cell_count_of_net_by_group.assign(num_of_nets(), {0, 0});
     size_of_group = {0, 0};
-
-    std::vector<size_t> random_cells(num_of_cells());
-    std::iota(BEGIN_END(random_cells), 0);
-    std::random_shuffle(BEGIN_END(random_cells));
-    
     for (cell_t cell = 0; cell < num_of_cells(); cell++) {
-        bool group = random_cells[cell] < num_of_cells() / 2;
-        group_of_cell[cell] = group;
+        bool group = group_of_cell[cell];
         size_of_group[group]++;
         for (net_t net : nets_of_cell[cell]) {
             cell_count_of_net_by_group[net][group]++;
@@ -211,15 +259,16 @@ PartitionOutput FiducciaMattheysesPartitioner::fiduccia_mattheyses() {
     }
     LOG(DEBUG) << endl;
 
-    LOG(INFO) << "\nmax possible gain: " << gain_offset << endl;
-
-    size_t iteration_min_cut_size = get_cut_size();
-    LOG(INFO) << "\ninitial cut size: " << iteration_min_cut_size << endl;
+    uint64_t cut_size = get_cut_size(); // current cut size, not always valid
+    // record only when satisfying the balance constraint
+    uint64_t iteration_min_cut_size = is_balanced() ? cut_size : UINT64_MAX;
+    LOG(INFO) << "\ninitial cut size: " << cut_size << endl;
+    if (!is_balanced()) LOG(INFO) << "initial partition does not satisfy the balance constraint, initial cut size is invalid." << endl;
     for (size_t iter = 0;; iter++) {
         LOG(INFO) << "================================ iteration " << iter + 1 
             << " ================================" << endl;
         
-        if (!do_one_iteration(iteration_min_cut_size)) {
+        if (!do_one_iteration(cut_size, iteration_min_cut_size)) {
             break;
         }
         
@@ -229,22 +278,18 @@ PartitionOutput FiducciaMattheysesPartitioner::fiduccia_mattheyses() {
         }
     }
 
-    PartitionOutput solution;
-    solution.cut_size = get_cut_size();
-    if (solution.cut_size != iteration_min_cut_size) {
+    cut_size = get_cut_size();
+    if (cut_size != iteration_min_cut_size) {
         LOG(FETAL) << "Error: cut size " << iteration_min_cut_size 
-            << " after trace back does not equal to the minimum cut size " << solution.cut_size 
+            << " after trace back does not equal to the minimum cut size " << cut_size 
             << " found in this iteration." << endl;
         exit(1);
     }
-    for (cell_t cell = 0; cell < num_of_cells(); cell++) {
-        solution.cells_of_group[group_of_cell[cell]].push_back(cell);
-    }
 
-    return solution;
+    best_cut_size = cut_size;
 }
 
-bool FiducciaMattheysesPartitioner::do_one_iteration(size_t& iteration_min_cut_size) {
+bool FiducciaMattheysesPartitioner::do_one_iteration(size_t& cut_size, size_t& iteration_min_cut_size) {
     max_gain_of_group = {MIN_GAIN, MIN_GAIN};
     head_cell_of_group_by_offset_gain[0].assign(2 * gain_offset + 1, -1);
     head_cell_of_group_by_offset_gain[1].assign(2 * gain_offset + 1, -1);
@@ -283,7 +328,6 @@ bool FiducciaMattheysesPartitioner::do_one_iteration(size_t& iteration_min_cut_s
         }
     }
     
-    size_t cut_size = iteration_min_cut_size;
     size_t min_cut_size = iteration_min_cut_size;
     cell_of_picked_No.clear();
     cell_of_picked_No.reserve(num_of_cells());
@@ -309,7 +353,7 @@ bool FiducciaMattheysesPartitioner::do_one_iteration(size_t& iteration_min_cut_s
         LOG(DEBUG) << "c" << cell_of_picked_No[i] << " ";
     }
     LOG(DEBUG) << endl;
-    // trace back to the state with min cut size
+    // trace back to the valid state with min cut size
     for (size_t i = cell_of_picked_No.size(); i --> picked_No_after_min_cut;) {
         cell_t cell = cell_of_picked_No[i];
         bool old_group = group_of_cell[cell], new_group = !old_group;
@@ -344,38 +388,34 @@ bool FiducciaMattheysesPartitioner::move_one_cell(
     size_t& cut_size, size_t& min_cut_size, size_t& picked_No_after_min_cut,
     array<size_t, 2>& unlocked_size_of_group
 ) {
-    bool permit_group_1_to_0 = size_of_group[0] + 1 <= (1 + balance_degree) / 2 * num_of_cells();
-    bool permit_group_0_to_1 = size_of_group[0] - 1 >= (1 - balance_degree) / 2 * num_of_cells();
+    bool permit_group_1_to_0 = size_of_group[0] + 1 <= max_group_size;
+    bool permit_group_0_to_1 = size_of_group[0] - 1 >= min_group_size;
 
     // pick a cell to move
     cell_t cell_to_move;
-    if (!permit_group_1_to_0 && !permit_group_0_to_1) {
-        // WIP
-        LOG(FETAL) << "Error: balance_degree is too large, cannot satisfy the balance constraint." << endl;
-        exit(1);
-    } else if (!permit_group_0_to_1 || unlocked_size_of_group[0] == 0) { // pick a cell in group 1
-        if (unlocked_size_of_group[1] == 0) { // no cell to pick
-            LOG(INFO) << "Fail to find a cell in group 1, ending the loop." << endl;
+    if ((permit_group_1_to_0 ^ permit_group_0_to_1) || 
+    unlocked_size_of_group[0] == 0 || unlocked_size_of_group[1] == 0) {
+        bool src = unlocked_size_of_group[0] == 0 ? 1 : unlocked_size_of_group[1] == 0 ? 0 : 
+            permit_group_1_to_0 ? 1 : 0;
+        if (unlocked_size_of_group[src] == 0) {
+            LOG(INFO) << "Fail to find a cell in group " << src << ", ending the loop." << endl;
             return false;
         }
-        LOG(DEBUG) << "group 0 too small, pick a cell in group 1" << endl;
-        while (head_cell_of_group_by_gain(1, max_gain_of_group[1]) == -1) max_gain_of_group[1]--;
-        cell_to_move = head_cell_of_group_by_gain(1, max_gain_of_group[1]);
-    } else if (!permit_group_1_to_0 || unlocked_size_of_group[1] == 0) { // pick a cell in group 0
-        if (unlocked_size_of_group[0] == 0) { // no cell to pick
-            LOG(INFO) << "Fail to find a cell in group 0, ending the loop." << endl;
-            return false;
-        }
-        LOG(DEBUG) << "group 1 too small, pick a cell in group 0" << endl;
-        while (head_cell_of_group_by_gain(0, max_gain_of_group[0]) == -1) max_gain_of_group[0]--;
-        cell_to_move = head_cell_of_group_by_gain(0, max_gain_of_group[0]);
+        LOG(DEBUG) << "pick a cell from group " << src << endl;
+        gain_t& max_gain = max_gain_of_group[src];
+        while (head_cell_of_group_by_gain(src, max_gain) == -1) max_gain--;
+        cell_to_move = head_cell_of_group_by_gain(src, max_gain);
     } else { // pick a cell in either group
         while (head_cell_of_group_by_gain(0, max_gain_of_group[0]) == -1) max_gain_of_group[0]--;
         while (head_cell_of_group_by_gain(1, max_gain_of_group[1]) == -1) max_gain_of_group[1]--;
         cell_t cell0 = head_cell_of_group_by_gain(0, max_gain_of_group[0]);
         cell_t cell1 = head_cell_of_group_by_gain(1, max_gain_of_group[1]);
         if (max_gain_of_group[0] == max_gain_of_group[1]) {
-            cell_to_move = (gain_update_ts_of_cell[cell0] >= gain_update_ts_of_cell[cell1]) ? cell0 : cell1;
+            if (gain_update_ts_of_cell[cell0] == gain_update_ts_of_cell[cell1]) {
+                cell_to_move = size_of_group[0] > size_of_group[1] ? cell0 : cell1; // for balance
+            } else {
+                cell_to_move = gain_update_ts_of_cell[cell0] > gain_update_ts_of_cell[cell1] ? cell0 : cell1;
+            }
         } else {
             cell_to_move = max_gain_of_group[1] > max_gain_of_group[0] ? cell1 : cell0;
         }
@@ -442,8 +482,9 @@ bool FiducciaMattheysesPartitioner::move_one_cell(
     }
     cut_size -= gain_of_cell[cell_to_move];
     cell_of_picked_No.push_back(cell_to_move);
-    if (cut_size < min_cut_size) {
-        min_cut_size = cut_size;
+    // if not satisfy balance constraint, consider invalid
+    if (cut_size < min_cut_size && is_balanced()) {
+        min_cut_size = cut_size; // min_cut_size must be valid
         picked_No_after_min_cut = cell_of_picked_No.size();
     }
     locked_of_cell[cell_to_move] = true;
@@ -521,27 +562,23 @@ std::tuple<
     input >> partition_input.balance_degree;
 
     std::vector<std::string> name_of_cell;
-    std::unordered_map<std::string, cell_t> index_of_cell_name;
+    std::unordered_map<std::string, cell_t> cell_of_name;
     
     std::string tmp;
     while (input >> tmp) {
         input >> tmp; // net name
-        std::set<cell_t> cells_in_this_net;
+        partition_input.cells_of_net.push_back({});
         for (;;) {
             input >> tmp;
             if (tmp == ";") break;
 
-            cell_t cell;
-            if (index_of_cell_name.find(tmp) == index_of_cell_name.end()) {
-                cell = name_of_cell.size();
+            if (!cell_of_name.count(tmp)) {
+                cell_of_name[tmp] = name_of_cell.size();
                 name_of_cell.push_back(tmp);
-                index_of_cell_name[tmp] = cell;
-            } else {
-                cell = index_of_cell_name[tmp];
             }
-            cells_in_this_net.insert(cell);
+            cell_t cell = cell_of_name[tmp];
+            partition_input.cells_of_net.back().insert(cell);
         }
-        partition_input.cells_of_net.emplace_back(BEGIN_END(cells_in_this_net));
     }
 
     return {partition_input, name_of_cell};
@@ -562,14 +599,4 @@ void PartitionOutput::to_file(const std::string& output_file, const std::vector<
         }
         output << ";" << endl;
     }
-}
-
-PartitionOutput partition(
-    const PartitionInput& input, 
-    uint32_t repeat,
-    double time_limit_seconds
-) {
-    FiducciaMattheysesPartitioner partitioner(input, repeat, time_limit_seconds);
-    partitioner.solve();
-    return partitioner.output;
 }

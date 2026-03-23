@@ -3,19 +3,15 @@
 
 #include <cstdint>
 #include <vector>
-#include <set>
+#include <unordered_set>
 #include <array>
 #include <string>
 #include <tuple>
-
-typedef int32_t cell_t; // cell index type
-typedef int32_t net_t; // net index type
-typedef int32_t gain_t; // gain type
-constexpr gain_t MIN_GAIN = INT32_MIN;
+#include "constant.h"
 
 struct PartitionInput {
     double balance_degree;
-    std::vector<std::set<cell_t>> cells_of_net; // net -> cell indices
+    std::vector<std::unordered_set<cell_t>> cells_of_net; // net -> cell indices
 
     static std::tuple<
         PartitionInput, 

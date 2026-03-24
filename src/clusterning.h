@@ -13,7 +13,8 @@ struct ClusteringResult {
 
 ClusteringResult first_choice_clustering(
     const std::vector<std::vector<cell_t>>& cells_of_net, 
-    const std::vector<std::vector<net_t>>& nets_of_cell
+    const std::vector<std::vector<net_t>>& nets_of_cell,
+    const std::vector<std::size_t>& size_of_cell
 );
 
 #endif

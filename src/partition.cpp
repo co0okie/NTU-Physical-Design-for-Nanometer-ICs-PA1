@@ -131,7 +131,7 @@ PartitionOutput partition(
     LOG(INFO) << "before clustering: num_of_nets " << cells_of_net.size() 
         << " num_of_cells " << nets_of_cell.size() << endl;
 
-    auto result = first_choice_clustering(cells_of_net, nets_of_cell);
+    auto result = first_choice_clustering(cells_of_net, nets_of_cell, size_of_cell);
 
     LOG(INFO) << "after clustering: num_of_nets " << result.clusters_of_new_net.size() 
         << " num_of_cells " << result.new_nets_of_cluster.size() << endl;

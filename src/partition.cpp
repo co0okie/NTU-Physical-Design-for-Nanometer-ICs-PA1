@@ -13,8 +13,12 @@
 #include <numeric>
 #include <exception>
 #include <random>
+#include <tuple>
 #include "partition.h"
 #include "clusterning.h"
+
+constexpr size_t MAX_CELL_COUNT_TO_PARTITION = 10000;
+constexpr int PARTITION_REPEAT = 16;
 
 using std::vector; 
 using std::string; 
@@ -26,6 +30,7 @@ using std::ostream;
 using std::unordered_map;
 using std::unordered_set;
 using std::list;
+using std::tuple;
 using std::max;
 using std::min;
 using std::array;
@@ -108,6 +113,10 @@ private:
     array<gain_t, 2> max_gain_of_group;
 };
 
+tuple<size_t, vector<bool>> hMetis(double balance_degree, const vector<vector<cell_t>>& cells_of_net, 
+    const vector<vector<net_t>>& nets_of_cell, const vector<size_t>& size_of_cell,
+    time_point start_time, double time_limit_seconds, int depth = 1);
+
 PartitionOutput partition(
     const PartitionInput& input, 
     uint32_t repeat,
@@ -128,45 +137,90 @@ PartitionOutput partition(
 
     vector<size_t> size_of_cell(nets_of_cell.size(), 1); // cell -> size of this cell, used for clustering
 
-    LOG(INFO) << "before clustering: num_of_nets " << cells_of_net.size() 
-        << " num_of_cells " << nets_of_cell.size() << endl;
-
-    auto result = first_choice_clustering(cells_of_net, nets_of_cell, size_of_cell);
-
-    LOG(INFO) << "after clustering: num_of_nets " << result.clusters_of_new_net.size() 
-        << " num_of_cells " << result.new_nets_of_cluster.size() << endl;
-
-    FiducciaMattheysesPartitioner cluster_partitioner(
-        input.balance_degree, 
-        result.clusters_of_new_net, result.new_nets_of_cluster, 
-        {}, // random initial partition
-        result.size_of_cluster,
-        start_time, time_limit_seconds
-    );
-    cluster_partitioner.solve();
-
-    // declustering
-    auto& group_of_cluster = cluster_partitioner.group_of_cell;
-    vector<bool> group_of_cell(nets_of_cell.size());
-    for (cell_t cell = 0; cell < nets_of_cell.size(); cell++) {
-        group_of_cell[cell] = group_of_cluster[result.cluster_of_cell[cell]];
-    }
-
-    FiducciaMattheysesPartitioner cell_partitioner(
-        input.balance_degree, 
-        cells_of_net, nets_of_cell, 
-        group_of_cell, // initial partition from cluster partition result
-        size_of_cell, 
-        start_time, time_limit_seconds
-    );
-    cell_partitioner.solve();
+    LOG(INFO) << "start hMetis with " << cells_of_net.size() << " nets " 
+        << nets_of_cell.size() << " cells." << endl;
+    
+    auto result = hMetis(input.balance_degree, cells_of_net, nets_of_cell, size_of_cell, 
+        start_time, time_limit_seconds);
+    auto& cut_size = std::get<0>(result);
+    auto& group_of_cell = std::get<1>(result);
 
     PartitionOutput output;
-    output.cut_size = cell_partitioner.best_cut_size;
+    output.cut_size = cut_size;
     for (cell_t cell = 0; cell < nets_of_cell.size(); cell++) {
-        output.cells_of_group[cell_partitioner.group_of_cell[cell]].push_back(cell);
+        output.cells_of_group[group_of_cell[cell]].push_back(cell);
     }
     return output;
+}
+
+tuple<size_t, vector<bool>> hMetis(
+    double balance_degree,
+    const vector<vector<cell_t>>& cells_of_net, 
+    const vector<vector<net_t>>& nets_of_cell,
+    const vector<size_t>& size_of_cell,
+    time_point start_time, double time_limit_seconds, int depth
+) {
+    LOG(INFO) << "*================================== depth " << depth << 
+        " hMetis ==================================* " << endl;
+    tuple<size_t, vector<bool>> best_result = {UINT64_MAX, {}};
+
+    if (nets_of_cell.size() < MAX_CELL_COUNT_TO_PARTITION) {
+        // small enough to directly partition without clustering
+        LOG(INFO) << "cell count " << nets_of_cell.size() << " < " << MAX_CELL_COUNT_TO_PARTITION
+            << ", start partitioning" << endl;
+        for (uint32_t r = 1; r <= PARTITION_REPEAT; r++) {
+            LOG(INFO) << "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX repeat " 
+                << r << "/" << PARTITION_REPEAT << " XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX" << endl;
+            FiducciaMattheysesPartitioner partitioner(
+                balance_degree, cells_of_net, nets_of_cell, 
+                {}, // random initial partition
+                size_of_cell, start_time, time_limit_seconds
+            );
+            partitioner.solve();
+
+            if (partitioner.best_cut_size < std::get<0>(best_result)) {
+                best_result = {partitioner.best_cut_size, partitioner.group_of_cell};
+            }
+        }
+
+        LOG(INFO) << "best cut size = " << std::get<0>(best_result) 
+            << " after " << PARTITION_REPEAT << " repeat" << endl;
+    } else {
+        LOG(INFO) << "too many cells to directly partition, clustering first." << endl;
+    
+        auto result1 = first_choice_clustering(cells_of_net, nets_of_cell, size_of_cell);
+    
+        auto min_max = std::minmax_element(BEGIN_END(result1.size_of_cluster));
+        LOG(INFO) << "after clustering: " << result1.clusters_of_new_net.size() << " nets "
+            << result1.new_nets_of_cluster.size() << " clusters" << endl;
+        LOG(INFO) << "min cluster size " << *min_max.first << " max cluster size " << *min_max.second << endl;
+        
+        auto result2 = hMetis(
+            balance_degree, 
+            result1.clusters_of_new_net, result1.new_nets_of_cluster, 
+            result1.size_of_cluster, start_time, time_limit_seconds, depth + 1
+        );
+    
+        auto& group_of_cluster = std::get<1>(result2);
+        vector<bool> group_of_cell(nets_of_cell.size());
+        for (cell_t cell = 0; cell < nets_of_cell.size(); cell++) {
+            group_of_cell[cell] = group_of_cluster[result1.cluster_of_cell[cell]];
+        }
+    
+        LOG(INFO) << "start refinement for depth " << depth << " hMetis" << endl;
+    
+        FiducciaMattheysesPartitioner partitioner(
+            balance_degree, cells_of_net, nets_of_cell, group_of_cell,
+            size_of_cell, start_time, time_limit_seconds
+        );
+        partitioner.solve();
+
+        best_result = {partitioner.best_cut_size, partitioner.group_of_cell};
+    }
+    
+    LOG(INFO) << "*================================== end of depth " << depth << 
+        " hMetis ==================================* " << endl;
+    return best_result;
 }
 
 FiducciaMattheysesPartitioner::FiducciaMattheysesPartitioner(

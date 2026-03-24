@@ -30,8 +30,8 @@ ClusteringResult first_choice_clustering(const vector<vector<cell_t>>& cells_of_
     auto num_of_nets = cells_of_net.size();
     vector<cell_t> root_of_cell(num_of_cells); // cell -> root cell represent a unique cluster
     iota(BEGIN_END(root_of_cell), 0);
-    vector<size_t> size_of_cluster(num_of_cells, 1);
-    auto is_matched = [&](cell_t cell) { return size_of_cluster[root_of_cell[cell]] > 1; };
+    vector<size_t> size_of_root(num_of_cells, 1);
+    auto is_matched = [&](cell_t cell) { return size_of_root[root_of_cell[cell]] > 1; };
 
     for (cell_t cell = 0; cell < num_of_cells; cell++) {
         if (is_matched(cell)) {
@@ -41,10 +41,12 @@ ClusteringResult first_choice_clustering(const vector<vector<cell_t>>& cells_of_
         LOG(TRACE) << "Evaluating cell c" << cell << " for clustering:" << endl;
 
         double max_weight = -1.0;
-        cell_t best_cluster = -1;
+        cell_t best_root = -1;
         unordered_map<cell_t, double> weight_of_cluster;
 
         for (net_t net : nets_of_cell[cell]) {
+            // prevent net with too many cells to save time
+            // their contribution to weight is small enough to ignore
             if (cells_of_net[net].size() > 10) continue; 
             
             double edge_weight = 1.0 / (cells_of_net[net].size() - 1);
@@ -55,27 +57,26 @@ ClusteringResult first_choice_clustering(const vector<vector<cell_t>>& cells_of_
         }
 
         for (const auto& pair : weight_of_cluster) {
-            cell_t cluster = pair.first;
+            cell_t root = pair.first;
             double weight = pair.second;
-            LOG(TRACE) << "  - Cluster c" << cluster << " weight: " << weight << ", size: " << size_of_cluster[cluster] << endl;
+            LOG(TRACE) << "  - Cluster c" << root << " weight: " << weight << ", size: " << size_of_root[root] << endl;
             if (weight > max_weight ||
-            (weight == max_weight && size_of_cluster[cluster] < size_of_cluster[best_cluster])) {
+            (weight == max_weight && size_of_root[root] < size_of_root[best_root])) {
                 max_weight = weight;
-                best_cluster = cluster;
+                best_root = root;
             }
         }
 
-        if (best_cluster != -1) {
-            root_of_cell[cell] = best_cluster;
-            size_of_cluster[best_cluster] += 1;
-            LOG(TRACE) << "c" << cell << " clustered with c" << best_cluster 
-                << " (weight: " << max_weight << ", size: " << size_of_cluster[best_cluster] << ")" << endl;
+        if (best_root != -1) {
+            root_of_cell[cell] = best_root;
+            size_of_root[best_root] += 1;
+            LOG(TRACE) << "c" << cell << " clustered with c" << best_root 
+                << " (weight: " << max_weight << ", size: " << size_of_root[best_root] << ")" << endl;
         }
     }
 
     unordered_map<cell_t, cell_t> cluster_of_root; // root cell -> cluster index
     vector<cell_t> root_of_cluster; // cluster -> root cell represent this cluster
-    vector<net_t> net_of_new_net; // new net -> old net index
     vector<unordered_set<cell_t>> clusters_of_new_net; // net -> cluster indices connected to this net
     for (net_t net = 0; net < num_of_nets; net++) {
         unordered_set<cell_t> clusters;
@@ -90,7 +91,6 @@ ClusteringResult first_choice_clustering(const vector<vector<cell_t>>& cells_of_
         }
         if (clusters.size() > 1) {
             clusters_of_new_net.emplace_back(std::move(clusters));
-            net_of_new_net.emplace_back(net);
         } else if (clusters.size() == 1) {
             LOG(TRACE) << "Net n" << net << " is fully absorbed into cluster " << *clusters.begin() << endl;
         }
@@ -108,6 +108,11 @@ ClusteringResult first_choice_clustering(const vector<vector<cell_t>>& cells_of_
         cluster_of_cell[cell] = cluster_of_root[root_of_cell[cell]];
     }
 
+    vector<size_t> size_of_cluster(root_of_cluster.size()); // cluster -> cell count of this cluster
+    for (cell_t cluster = 0; cluster < root_of_cluster.size(); cluster++) {
+        size_of_cluster[cluster] = size_of_root[root_of_cluster[cluster]];
+    }
+
     RUN(TRACE) {
         for (cell_t cell = 0; cell < num_of_cells; cell++) {
             LOG(TRACE) << "Cell c" << cell << " -> Cluster " << cluster_of_cell[cell] << endl;
@@ -122,6 +127,7 @@ ClusteringResult first_choice_clustering(const vector<vector<cell_t>>& cells_of_
     return ClusteringResult({
         .clusters_of_new_net = std::move(_clusters_of_new_net),
         .new_nets_of_cluster = std::move(new_nets_of_cluster),
-        .cluster_of_cell = std::move(cluster_of_cell)
+        .cluster_of_cell = std::move(cluster_of_cell),
+        .size_of_cluster = std::move(size_of_cluster)
     });
 }

@@ -52,7 +52,7 @@ public:
     FiducciaMattheysesPartitioner(
         double _balance_degree, 
         const vector<vector<cell_t>>& _cells_of_net, const vector<vector<net_t>>& _nets_of_cell,
-        const vector<bool>& _group_of_cell,
+        const vector<bool>& _group_of_cell, const vector<size_t>& _size_of_cell,
         time_point _start_time, double _time_limit_seconds
     );
     void solve();
@@ -75,6 +75,7 @@ private:
     bool is_balanced() const {
         return min_group_size <= size_of_group[0] && size_of_group[0] <= max_group_size;
     }
+    const vector<size_t>& size_of_cell; // cell -> size of this cell, used for clustering
 
     const gain_t gain_offset; // max possible gain = max number of nets connected to a cell
 
@@ -103,7 +104,7 @@ private:
     void push_cell_to_front_of_gain(cell_t cell, gain_t gain, bool group);
     void erase_cell_of_gain(cell_t cell, gain_t gain, bool group);
 
-    array<size_t, 2> size_of_group; // group -> number of cells in this group
+    array<size_t, 2> size_of_group; // group -> cell size sum in this group
     array<gain_t, 2> max_gain_of_group;
 };
 
@@ -125,6 +126,8 @@ PartitionOutput partition(
         }
     }
 
+    vector<size_t> size_of_cell(nets_of_cell.size(), 1); // cell -> size of this cell, used for clustering
+
     LOG(INFO) << "before clustering: num_of_nets " << cells_of_net.size() 
         << " num_of_cells " << nets_of_cell.size() << endl;
 
@@ -137,6 +140,7 @@ PartitionOutput partition(
         input.balance_degree, 
         result.clusters_of_new_net, result.new_nets_of_cluster, 
         {}, // random initial partition
+        result.size_of_cluster,
         start_time, time_limit_seconds
     );
     cluster_partitioner.solve();
@@ -152,6 +156,7 @@ PartitionOutput partition(
         input.balance_degree, 
         cells_of_net, nets_of_cell, 
         group_of_cell, // initial partition from cluster partition result
+        size_of_cell, 
         start_time, time_limit_seconds
     );
     cell_partitioner.solve();
@@ -167,11 +172,11 @@ PartitionOutput partition(
 FiducciaMattheysesPartitioner::FiducciaMattheysesPartitioner(
     double _balance_degree, 
     const vector<vector<cell_t>>& _cells_of_net, const vector<vector<net_t>>& _nets_of_cell,
-    const vector<bool>& _group_of_cell,
+    const vector<bool>& _group_of_cell, const vector<size_t>& _size_of_cell,
     time_point _start_time, double _time_limit_seconds
-) : balance_degree(_balance_degree),
-    min_group_size((1 - _balance_degree) / 2 * _nets_of_cell.size()), 
-    max_group_size((1 + _balance_degree) / 2 * _nets_of_cell.size()),
+) : balance_degree(_balance_degree), size_of_cell(_size_of_cell),
+    min_group_size((1 - _balance_degree) / 2 * std::accumulate(BEGIN_END(_size_of_cell), 0)), 
+    max_group_size((1 + _balance_degree) / 2 * std::accumulate(BEGIN_END(_size_of_cell), 0)),
     cells_of_net(_cells_of_net), nets_of_cell(_nets_of_cell), 
     start_time(_start_time), time_limit_seconds(_time_limit_seconds),
     gain_offset(std::max_element(BEGIN_END(_nets_of_cell), [](const vector<net_t>& a, const vector<net_t>& b) {
@@ -231,16 +236,11 @@ FiducciaMattheysesPartitioner::FiducciaMattheysesPartitioner(
 }
 
 void FiducciaMattheysesPartitioner::solve() {
-    if ((1 - balance_degree) / 2 * num_of_cells() > num_of_cells() / 2) {
-        LOG(FETAL) << "Error: balance_degree is too small, cannot satisfy the balance constraint." << endl;
-        exit(1);
-    }
-
     cell_count_of_net_by_group.assign(num_of_nets(), {0, 0});
     size_of_group = {0, 0};
     for (cell_t cell = 0; cell < num_of_cells(); cell++) {
         bool group = group_of_cell[cell];
-        size_of_group[group]++;
+        size_of_group[group] += size_of_cell[cell];
         for (net_t net : nets_of_cell[cell]) {
             cell_count_of_net_by_group[net][group]++;
         }
@@ -321,7 +321,7 @@ bool FiducciaMattheysesPartitioner::do_one_iteration(size_t& cut_size, size_t& i
                 LOG(DEBUG) << "gain " << gain << ": ";
                 for (cell_t cell = head_cell_of_group_by_gain(group, gain); cell != -1; cell = next_of_cell[cell]) { 
                     LOG(DEBUG) << "c" << cell << " ";
-                    cell_count--;
+                    cell_count -= size_of_cell[cell];
                 }
                 LOG(DEBUG) << endl;
             }
@@ -333,13 +333,11 @@ bool FiducciaMattheysesPartitioner::do_one_iteration(size_t& cut_size, size_t& i
     cell_of_picked_No.reserve(num_of_cells());
     size_t picked_No_after_min_cut = 0; // {cut 5} {pick cell 1} {cut 2} {pick cell 0} {cut 6}, in this case picked_No_after_min_cut = 1
     array<size_t, 2> unlocked_size_of_group = {size_of_group[0], size_of_group[1]}; // group -> number of unlocked cells in this group
-    auto num_of_unlocked_cells = [&]() { return unlocked_size_of_group[0] + unlocked_size_of_group[1]; };
+    auto unlocked_total_size = [&]() { return unlocked_size_of_group[0] + unlocked_size_of_group[1]; };
     locked_of_cell.assign(num_of_cells(), false);
 
-    while (num_of_unlocked_cells()) {
-        LOG(DEBUG) << "---------------------------------- move " 
-            << num_of_cells() - num_of_unlocked_cells() + 1
-            << "th cell ----------------------------------" << endl;
+    for (size_t i = 1 ; unlocked_total_size(); i++) {
+        LOG(DEBUG) << "---------------------------------- move " << i << "th cell ----------------------------------" << endl;
 
         if (!move_one_cell(cut_size, min_cut_size, picked_No_after_min_cut, unlocked_size_of_group)) {
             break;
@@ -358,9 +356,9 @@ bool FiducciaMattheysesPartitioner::do_one_iteration(size_t& cut_size, size_t& i
         cell_t cell = cell_of_picked_No[i];
         bool old_group = group_of_cell[cell], new_group = !old_group;
         group_of_cell[cell] = new_group;
-        unlocked_size_of_group[new_group]++;
-        size_of_group[old_group]--;
-        size_of_group[new_group]++;
+        unlocked_size_of_group[new_group] += size_of_cell[cell];
+        size_of_group[old_group] -= size_of_cell[cell];
+        size_of_group[new_group] += size_of_cell[cell];
         for (net_t net : nets_of_cell[cell]) {
             cell_count_of_net_by_group[net][old_group]--;
             cell_count_of_net_by_group[net][new_group]++;
@@ -388,8 +386,11 @@ bool FiducciaMattheysesPartitioner::move_one_cell(
     size_t& cut_size, size_t& min_cut_size, size_t& picked_No_after_min_cut,
     array<size_t, 2>& unlocked_size_of_group
 ) {
-    bool permit_group_1_to_0 = size_of_group[0] + 1 <= max_group_size;
-    bool permit_group_0_to_1 = size_of_group[0] - 1 >= min_group_size;
+    while (unlocked_size_of_group[0] && head_cell_of_group_by_gain(0, max_gain_of_group[0]) == -1) max_gain_of_group[0]--;
+    while (unlocked_size_of_group[1] && head_cell_of_group_by_gain(1, max_gain_of_group[1]) == -1) max_gain_of_group[1]--;
+
+    bool permit_group_1_to_0 = size_of_group[0] <= max_group_size;
+    bool permit_group_0_to_1 = size_of_group[0] >= min_group_size;
 
     // pick a cell to move
     cell_t cell_to_move;
@@ -403,11 +404,8 @@ bool FiducciaMattheysesPartitioner::move_one_cell(
         }
         LOG(DEBUG) << "pick a cell from group " << src << endl;
         gain_t& max_gain = max_gain_of_group[src];
-        while (head_cell_of_group_by_gain(src, max_gain) == -1) max_gain--;
         cell_to_move = head_cell_of_group_by_gain(src, max_gain);
     } else { // pick a cell in either group
-        while (head_cell_of_group_by_gain(0, max_gain_of_group[0]) == -1) max_gain_of_group[0]--;
-        while (head_cell_of_group_by_gain(1, max_gain_of_group[1]) == -1) max_gain_of_group[1]--;
         cell_t cell0 = head_cell_of_group_by_gain(0, max_gain_of_group[0]);
         cell_t cell1 = head_cell_of_group_by_gain(1, max_gain_of_group[1]);
         if (max_gain_of_group[0] == max_gain_of_group[1]) {
@@ -434,33 +432,33 @@ bool FiducciaMattheysesPartitioner::move_one_cell(
     for (size_t i = 0; i < nets_of_cell[cell_to_move].size(); i++) {
         net_t net = nets_of_cell[cell_to_move][i];
 
-        bool FROM_group = group_of_cell[cell_to_move], TO_group = !FROM_group;
-        size_t TO_group_cell_count = cell_count_of_net_by_group[net][TO_group];
-        size_t FROM_group_cell_count = cell_count_of_net_by_group[net][FROM_group];
+        bool src_group = group_of_cell[cell_to_move], dst_group = !src_group;
+        size_t dst_group_cell_count = cell_count_of_net_by_group[net][dst_group];
+        size_t src_group_cell_count = cell_count_of_net_by_group[net][src_group];
 
-        if (TO_group_cell_count == 0) {
+        if (dst_group_cell_count == 0) {
             for (cell_t cell : cells_of_net[net]) {
                 if (!locked_of_cell[cell] && cell != cell_to_move) increase_gain_of_cell(cell, 1);
             }
-        } else if (TO_group_cell_count == 1) {
+        } else if (dst_group_cell_count == 1) {
             for (cell_t cell : cells_of_net[net]) {
-                if (!locked_of_cell[cell] && cell != cell_to_move && group_of_cell[cell] == TO_group) {
+                if (!locked_of_cell[cell] && cell != cell_to_move && group_of_cell[cell] == dst_group) {
                     increase_gain_of_cell(cell, -1);
                     break;
                 }
             }
         }
 
-        TO_group_cell_count++;
-        FROM_group_cell_count--;
+        dst_group_cell_count++;
+        src_group_cell_count--;
 
-        if (FROM_group_cell_count == 0) {
+        if (src_group_cell_count == 0) {
             for (cell_t cell : cells_of_net[net]) {
                 if (!locked_of_cell[cell] && cell != cell_to_move) increase_gain_of_cell(cell, -1);
             }
-        } else if (FROM_group_cell_count == 1) {
+        } else if (src_group_cell_count == 1) {
             for (cell_t cell : cells_of_net[net]) {
-                if (!locked_of_cell[cell] && cell != cell_to_move && group_of_cell[cell] == FROM_group) {
+                if (!locked_of_cell[cell] && cell != cell_to_move && group_of_cell[cell] == src_group) {
                     increase_gain_of_cell(cell, 1);
                     break;
                 }
@@ -471,12 +469,12 @@ bool FiducciaMattheysesPartitioner::move_one_cell(
     // move cell to another group
     bool old_group = group_of_cell[cell_to_move], new_group = !old_group;
     gain_t gain = gain_of_cell[cell_to_move];
-    unlocked_size_of_group[old_group]--;
-    size_of_group[old_group]--;
+    unlocked_size_of_group[old_group] -= size_of_cell[cell_to_move];
+    size_of_group[old_group] -= size_of_cell[cell_to_move];
     erase_cell_of_gain(cell_to_move, gain, old_group);
     group_of_cell[cell_to_move] = new_group;
-    size_of_group[new_group]++;
-    for (auto net : nets_of_cell[cell_to_move]) {
+    size_of_group[new_group] += size_of_cell[cell_to_move];
+    for (net_t net : nets_of_cell[cell_to_move]) {
         cell_count_of_net_by_group[net][old_group]--;
         cell_count_of_net_by_group[net][new_group]++;
     }
@@ -497,7 +495,7 @@ bool FiducciaMattheysesPartitioner::move_one_cell(
                 LOG(TRACE) << "gain " << gain << ": ";
                 for (cell_t cell = head_cell_of_group_by_gain(group, gain); cell != -1; cell = next_of_cell[cell]) { 
                     LOG(TRACE) << "c" << cell << " ";
-                    cell_count--;
+                    cell_count -= size_of_cell[cell];
                 }
                 LOG(TRACE) << endl;
             }

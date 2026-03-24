@@ -2,6 +2,7 @@
 #define CONSTANT_H
 
 #include <cstdint>
+#include <cstddef>
 
 #define BEGIN_END(container) (container).begin(), (container).end()
 

@@ -34,10 +34,26 @@ run_all: bin/$(EXECUTABLE)
 		{ T[$$i]=$$( { TIMEFORMAT="%R"; time ./$< testcase/input_$$i.dat testcase/output_$$i.dat 1>&3 2>&4; } 2>&1 ); } 3>&1 4>&2; \
 	done; \
 	for i in 0 1 2 3 4 5; do \
+		echo; \
+		echo "## input_$$i.dat"; \
+		echo; \
+		echo '```'; \
 		evaluator/evaluator.sh testcase/input_$$i.dat testcase/output_$$i.dat $${T[$$i]} \
 		| tee testcase/result_$$i.txt; \
+		echo '```'; \
 	done; \
 	rm -f time_*.tmp
+
+evaluate:
+	for i in 0 1 2 3 4 5; do \
+		echo; \
+		echo "## input_$$i.dat"; \
+		echo; \
+		echo '```'; \
+		evaluator/evaluator.sh testcase/input_$$i.dat testcase/output_$$i.dat 1 \
+		| tee testcase/result_$$i.txt; \
+		echo '```'; \
+	done; \
 
 bin/test: src/test.o $(filter-out src/main.o, $(OBJECTS))
 	mkdir -p $(@D)

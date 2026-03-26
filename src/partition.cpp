@@ -17,7 +17,6 @@
 #include "partition.h"
 #include "clusterning.h"
 
-constexpr size_t MAX_CELL_COUNT_TO_PARTITION = 10000;
 constexpr int PARTITION_REPEAT = 16;
 
 using std::vector; 
@@ -52,6 +51,15 @@ constexpr LogLevel LOG_LEVEL = INFO;
 #define RUN(level) if (level > LOG_LEVEL) {} else
 #define LOG(level) RUN(level) std::cout
 
+size_t get_cut_size(const vector<array<size_t, 2>>& cell_count_of_net_by_group) {
+    size_t cut_size = 0;
+    for (net_t net = 0; net < cell_count_of_net_by_group.size(); net++) {
+        if (cell_count_of_net_by_group[net][0] != 0 && cell_count_of_net_by_group[net][1] != 0) 
+            cut_size++;
+    }
+    return cut_size;
+}
+
 class FiducciaMattheysesPartitioner {
 public:
     FiducciaMattheysesPartitioner(
@@ -60,17 +68,24 @@ public:
         const vector<bool>& _group_of_cell, const vector<size_t>& _size_of_cell,
         time_point _start_time, double _time_limit_seconds
     );
-    void solve();
+    // return 0: success
+    // return 1: incorrect cut size after trace back, which should not happen
+    // return 2: no valid partitioning found
+    int solve();
     uint64_t best_cut_size;
     vector<bool> group_of_cell; // cell -> group index (0 or 1)
 
 private:
-    bool do_one_iteration(size_t& cut_size, size_t& iteration_min_cut_size);
-    bool move_one_cell(size_t& cut_size, size_t& min_cut_size, size_t& picked_No_after_min_cut, 
+    // return 0: success
+    // return 1: cut size does not decrease
+    // return 2: no valid partitioning found in this iteration
+    int do_one_iteration(size_t& cut_size, size_t& iteration_min_cut_size);
+
+    // return 0: success
+    // return 1: no cell can be moved, ending the iteration
+    int move_one_cell(size_t& cut_size, size_t& min_cut_size, size_t& picked_No_after_min_cut, 
         array<size_t, 2>& unlocked_size_of_group);
     
-    size_t get_cut_size() const;
-
     const time_point start_time;
     const double time_limit_seconds;
 
@@ -145,11 +160,30 @@ PartitionOutput partition(
     auto& cut_size = std::get<0>(result);
     auto& group_of_cell = std::get<1>(result);
 
+    if (group_of_cell.empty()) {
+        LOG(WARNING) << "hMetis fails to find a valid partitioning, randomly partitioning" << endl;
+        group_of_cell.resize(nets_of_cell.size());
+        for (cell_t cell = 0; cell < nets_of_cell.size(); cell++) {
+            group_of_cell[cell] = cell % 2;
+        }
+        vector<array<size_t, 2>> cell_count_of_net_by_group(cells_of_net.size(), {0, 0});
+        for (cell_t cell = 0; cell < nets_of_cell.size(); cell++) {
+            for (net_t net : nets_of_cell[cell]) {
+                cell_count_of_net_by_group[net][group_of_cell[cell]]++;
+            }
+        }
+        cut_size = get_cut_size(cell_count_of_net_by_group);
+    }
+
     PartitionOutput output;
     output.cut_size = cut_size;
     for (cell_t cell = 0; cell < nets_of_cell.size(); cell++) {
         output.cells_of_group[group_of_cell[cell]].push_back(cell);
     }
+
+    LOG(INFO) << "final cut size = " << cut_size << endl;
+    LOG(INFO) << "group0_size " << output.cells_of_group[0].size() << " group1_size " << output.cells_of_group[1].size() << endl;
+
     return output;
 }
 
@@ -164,10 +198,40 @@ tuple<size_t, vector<bool>> hMetis(
         " hMetis ==================================* " << endl;
     tuple<size_t, vector<bool>> best_result = {UINT64_MAX, {}};
 
-    if (nets_of_cell.size() < MAX_CELL_COUNT_TO_PARTITION) {
-        // small enough to directly partition without clustering
-        LOG(INFO) << "cell count " << nets_of_cell.size() << " < " << MAX_CELL_COUNT_TO_PARTITION
-            << ", start partitioning" << endl;
+    LOG(INFO) << "trying pre-partitioning..." << endl;
+
+    FiducciaMattheysesPartitioner pre_partitioner(
+        balance_degree, cells_of_net, nets_of_cell, {},
+        size_of_cell, start_time, time_limit_seconds
+    );
+    int result = pre_partitioner.solve();
+
+    if (result != 0) {
+        LOG(INFO) << "pre-partitioning fails, maybe it's too deep" << endl;
+        LOG(INFO) << "*================================== end of depth " << depth << 
+            " hMetis ==================================* " << endl;
+        return {UINT64_MAX, {}};
+    }
+
+    best_result = {pre_partitioner.best_cut_size, pre_partitioner.group_of_cell};
+
+    LOG(INFO) << "try clustering..." << endl;
+
+    auto cluster_result = first_choice_clustering(cells_of_net, nets_of_cell, size_of_cell);
+
+    auto min_max = std::minmax_element(BEGIN_END(cluster_result.size_of_cluster));
+    LOG(INFO) << "after clustering: " << cluster_result.clusters_of_new_net.size() << " nets "
+        << cluster_result.new_nets_of_cluster.size() << " clusters" << endl;
+    LOG(INFO) << "min cluster size " << *min_max.first << " max cluster size " << *min_max.second << endl;
+    
+    auto hMetis_result = hMetis(
+        balance_degree, 
+        cluster_result.clusters_of_new_net, cluster_result.new_nets_of_cluster, 
+        cluster_result.size_of_cluster, start_time, time_limit_seconds, depth + 1
+    );
+
+    if (std::get<1>(hMetis_result).empty()) {
+        LOG(INFO) << "problem size small enough to directly partitioning" << endl;
         for (uint32_t r = 1; r <= PARTITION_REPEAT; r++) {
             LOG(INFO) << "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX repeat " 
                 << r << "/" << PARTITION_REPEAT << " XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX" << endl;
@@ -186,37 +250,23 @@ tuple<size_t, vector<bool>> hMetis(
         LOG(INFO) << "best cut size = " << std::get<0>(best_result) 
             << " after " << PARTITION_REPEAT << " repeat" << endl;
     } else {
-        LOG(INFO) << "too many cells to directly partition, clustering first." << endl;
-    
-        auto result1 = first_choice_clustering(cells_of_net, nets_of_cell, size_of_cell);
-    
-        auto min_max = std::minmax_element(BEGIN_END(result1.size_of_cluster));
-        LOG(INFO) << "after clustering: " << result1.clusters_of_new_net.size() << " nets "
-            << result1.new_nets_of_cluster.size() << " clusters" << endl;
-        LOG(INFO) << "min cluster size " << *min_max.first << " max cluster size " << *min_max.second << endl;
-        
-        auto result2 = hMetis(
-            balance_degree, 
-            result1.clusters_of_new_net, result1.new_nets_of_cluster, 
-            result1.size_of_cluster, start_time, time_limit_seconds, depth + 1
-        );
-    
-        auto& group_of_cluster = std::get<1>(result2);
+        auto& group_of_cluster = std::get<1>(hMetis_result);
         vector<bool> group_of_cell(nets_of_cell.size());
         for (cell_t cell = 0; cell < nets_of_cell.size(); cell++) {
-            group_of_cell[cell] = group_of_cluster[result1.cluster_of_cell[cell]];
+            group_of_cell[cell] = group_of_cluster[cluster_result.cluster_of_cell[cell]];
         }
-    
+
         LOG(INFO) << "start refinement for depth " << depth << " hMetis" << endl;
-    
+
         FiducciaMattheysesPartitioner partitioner(
             balance_degree, cells_of_net, nets_of_cell, group_of_cell,
             size_of_cell, start_time, time_limit_seconds
         );
-        partitioner.solve();
+        int result = partitioner.solve();
 
         best_result = {partitioner.best_cut_size, partitioner.group_of_cell};
     }
+
     
     LOG(INFO) << "*================================== end of depth " << depth << 
         " hMetis ==================================* " << endl;
@@ -289,7 +339,7 @@ FiducciaMattheysesPartitioner::FiducciaMattheysesPartitioner(
     }
 }
 
-void FiducciaMattheysesPartitioner::solve() {
+int FiducciaMattheysesPartitioner::solve() {
     cell_count_of_net_by_group.assign(num_of_nets(), {0, 0});
     size_of_group = {0, 0};
     for (cell_t cell = 0; cell < num_of_cells(); cell++) {
@@ -313,7 +363,7 @@ void FiducciaMattheysesPartitioner::solve() {
     }
     LOG(DEBUG) << endl;
 
-    uint64_t cut_size = get_cut_size(); // current cut size, not always valid
+    uint64_t cut_size = get_cut_size(cell_count_of_net_by_group); // current cut size, not always valid
     // record only when satisfying the balance constraint
     uint64_t iteration_min_cut_size = is_balanced() ? cut_size : UINT64_MAX;
     LOG(INFO) << "\ninitial cut size: " << cut_size << endl;
@@ -321,10 +371,10 @@ void FiducciaMattheysesPartitioner::solve() {
     for (size_t iter = 0;; iter++) {
         LOG(INFO) << "================================ iteration " << iter + 1 
             << " ================================" << endl;
-        
-        if (!do_one_iteration(cut_size, iteration_min_cut_size)) {
-            break;
-        }
+
+        int result = do_one_iteration(cut_size, iteration_min_cut_size);
+        if (result == 1) break;
+        else if (result == 2) return 2;
         
         if (time_limit_seconds > 0) {
             std::chrono::duration<double> elapsed = high_resolution_clock::now() - start_time;
@@ -332,18 +382,20 @@ void FiducciaMattheysesPartitioner::solve() {
         }
     }
 
-    cut_size = get_cut_size();
+    cut_size = get_cut_size(cell_count_of_net_by_group);
     if (cut_size != iteration_min_cut_size) {
         LOG(FETAL) << "Error: cut size " << iteration_min_cut_size 
             << " after trace back does not equal to the minimum cut size " << cut_size 
             << " found in this iteration." << endl;
-        exit(1);
+        return 1;
     }
 
     best_cut_size = cut_size;
+    
+    return 0;
 }
 
-bool FiducciaMattheysesPartitioner::do_one_iteration(size_t& cut_size, size_t& iteration_min_cut_size) {
+int FiducciaMattheysesPartitioner::do_one_iteration(size_t& cut_size, size_t& iteration_min_cut_size) {
     max_gain_of_group = {MIN_GAIN, MIN_GAIN};
     head_cell_of_group_by_offset_gain[0].assign(2 * gain_offset + 1, -1);
     head_cell_of_group_by_offset_gain[1].assign(2 * gain_offset + 1, -1);
@@ -393,11 +445,14 @@ bool FiducciaMattheysesPartitioner::do_one_iteration(size_t& cut_size, size_t& i
     for (size_t i = 1 ; unlocked_total_size(); i++) {
         LOG(DEBUG) << "---------------------------------- move " << i << "th cell ----------------------------------" << endl;
 
-        if (!move_one_cell(cut_size, min_cut_size, picked_No_after_min_cut, unlocked_size_of_group)) {
-            break;
-        }
+        int result = move_one_cell(cut_size, min_cut_size, picked_No_after_min_cut, unlocked_size_of_group);
+        if (result == 1) break;
     }
     
+    if (min_cut_size == UINT64_MAX) {
+        LOG(INFO) << "no valid partitioning found in this iteration, ending the loop" << endl;
+        return 2;
+    }
     LOG(INFO) << "min_cut_size = " << min_cut_size << " after " 
         << picked_No_after_min_cut << " cells moved" << endl;
     LOG(DEBUG) << "order of picked cells: ";
@@ -429,14 +484,14 @@ bool FiducciaMattheysesPartitioner::do_one_iteration(size_t& cut_size, size_t& i
 
     if (min_cut_size < iteration_min_cut_size) {
         iteration_min_cut_size = min_cut_size;
-        return true;
+        return 0;
     } else {
         LOG(INFO) << "cut size does not decrease, ending the loop." << endl;
-        return false;
+        return 1;
     }
 }
 
-bool FiducciaMattheysesPartitioner::move_one_cell(
+int FiducciaMattheysesPartitioner::move_one_cell(
     size_t& cut_size, size_t& min_cut_size, size_t& picked_No_after_min_cut,
     array<size_t, 2>& unlocked_size_of_group
 ) {
@@ -454,7 +509,7 @@ bool FiducciaMattheysesPartitioner::move_one_cell(
             permit_group_1_to_0 ? 1 : 0;
         if (unlocked_size_of_group[src] == 0) {
             LOG(INFO) << "Fail to find a cell in group " << src << ", ending the loop." << endl;
-            return false;
+            return 1;
         }
         LOG(DEBUG) << "pick a cell from group " << src << endl;
         gain_t& max_gain = max_gain_of_group[src];
@@ -556,16 +611,7 @@ bool FiducciaMattheysesPartitioner::move_one_cell(
         }
     }
     
-    return true;
-}
-
-size_t FiducciaMattheysesPartitioner::get_cut_size() const {
-    size_t cut_size = 0;
-    for (net_t net = 0; net < cells_of_net.size(); net++) {
-        if (cell_count_of_net_by_group[net][0] != 0 && cell_count_of_net_by_group[net][1] != 0) 
-            cut_size++;
-    }
-    return cut_size;
+    return 0;
 }
 
 void FiducciaMattheysesPartitioner::increase_gain_of_cell(cell_t cell, gain_t gain_change) {

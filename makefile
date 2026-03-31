@@ -17,6 +17,8 @@ INPUT=testcase/input_5.dat
 OUTPUT=$(subst input,output,$(INPUT))
 SHELL := /bin/bash
 
+.PHONY: clean run run_all test evaluate tgz
+
 all: bin/$(EXECUTABLE)
 
 bin/$(EXECUTABLE): $(OBJECTS)
@@ -62,5 +64,16 @@ bin/test: src/test.o $(filter-out src/main.o, $(OBJECTS))
 test: bin/test
 	./$<
 
+tgz: b11107051_pa1.tgz
+
+%.tgz: bin/fm src/*.cpp src/*.h makefile readme.txt report/report.pdf
+	temp_dir=$$(mktemp -d); \
+	mkdir -p "$$temp_dir"/$*/src "$$temp_dir"/$*/bin; \
+	cp src/*.cpp src/*.h "$$temp_dir"/$*/src/; \
+	cp bin/fm "$$temp_dir"/$*/bin/fm; \
+	cp makefile readme.txt report/report.pdf "$$temp_dir"/$*; \
+	tar zcvf $@ -C "$$temp_dir" $*; \
+	rm -rf "$$temp_dir"
+
 clean:
-	rm -rf src/*.o testcase/output_*.dat testcase/result_*.txt bin log a.out
+	rm -rf src/*.o testcase/output_*.dat testcase/result_*.txt bin log a.out b11107051_pa1.tgz report/report.aux report/report.fdb_latexmk report/report.fls report/report.log report/report.out report/report.synctex.gz report/report.xdv

@@ -1,7 +1,11 @@
 /bin
 lab.cpp
 a.out
-checkSubmitPA1.sh
 *.o
-/testcase/output_*.dat
+/testcase/*
+!/testcase/input_*.dat
 log
+report/*
+!report/report.tex
+!report/report.pdf
+*.tgz

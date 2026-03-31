@@ -10,7 +10,7 @@ int main(int argc, char* argv[]) {
     }
 
     auto input = PartitionInput::from_file(argv[1]);
-    PartitionOutput output = partition(std::get<0>(input), 16, 60 * 59);
+    PartitionOutput output = partition(std::get<0>(input), 60 * 59);
     output.to_file(argv[2], std::get<1>(input));
 
     return 0;

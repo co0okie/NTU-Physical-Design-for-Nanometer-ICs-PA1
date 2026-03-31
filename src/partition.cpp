@@ -132,7 +132,6 @@ tuple<size_t, vector<bool>> hMetis(double balance_degree, const vector<vector<ce
 
 PartitionOutput partition(
     const PartitionInput& input, 
-    uint32_t repeat,
     double time_limit_seconds
 ) {
     auto start_time = high_resolution_clock::now();

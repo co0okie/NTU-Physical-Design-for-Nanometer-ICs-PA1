@@ -28,7 +28,6 @@ struct PartitionOutput {
 
 PartitionOutput partition(
     const PartitionInput& input, 
-    uint32_t repeat = 1, 
     double time_limit_seconds = 60 * 60
 );
 

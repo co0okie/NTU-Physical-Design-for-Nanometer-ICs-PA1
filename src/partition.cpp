@@ -106,10 +106,8 @@ private:
     const vector<vector<net_t>>& nets_of_cell; // cell -> net indices
 
     vector<cell_t> cell_of_picked_No; // cell picked order sequence -> cell index
-    uint32_t gain_update_ts;
 
     vector<gain_t> gain_of_cell; // cell -> gain of this cell
-    vector<uint32_t> gain_update_ts_of_cell; // cell -> timestamp of the last gain update of this cell, to choose the latest updated cell
     vector<bool> locked_of_cell; // cell -> {0: unlocked, 1: locked}
     void increase_gain_of_cell(cell_t cell, gain_t gain_change);
 
@@ -289,7 +287,6 @@ FiducciaMattheysesPartitioner::FiducciaMattheysesPartitioner(
 {
     cell_of_picked_No.reserve(num_of_cells());
     gain_of_cell.reserve(num_of_cells());
-    gain_update_ts_of_cell.reserve(num_of_cells());
     locked_of_cell.reserve(num_of_cells());
     cell_count_of_net_by_group.reserve(num_of_nets());
     head_cell_of_group_by_offset_gain[0].reserve(2 * gain_offset + 1);
@@ -402,8 +399,6 @@ int FiducciaMattheysesPartitioner::do_one_iteration(size_t& cut_size, size_t& it
     prev_of_cell.assign(num_of_cells(), -1);
     next_of_cell.assign(num_of_cells(), -1);
     gain_of_cell.assign(num_of_cells(), 0);
-    gain_update_ts = 0;
-    gain_update_ts_of_cell.assign(num_of_cells(), gain_update_ts);
     
     for (cell_t cell = 0; cell < num_of_cells(); cell++) {
         gain_t gain = 0;
@@ -518,11 +513,7 @@ int FiducciaMattheysesPartitioner::move_one_cell(
         cell_t cell0 = head_cell_of_group_by_gain(0, max_gain_of_group[0]);
         cell_t cell1 = head_cell_of_group_by_gain(1, max_gain_of_group[1]);
         if (max_gain_of_group[0] == max_gain_of_group[1]) {
-            if (gain_update_ts_of_cell[cell0] == gain_update_ts_of_cell[cell1]) {
-                cell_to_move = size_of_group[0] > size_of_group[1] ? cell0 : cell1; // for balance
-            } else {
-                cell_to_move = gain_update_ts_of_cell[cell0] > gain_update_ts_of_cell[cell1] ? cell0 : cell1;
-            }
+            cell_to_move = size_of_group[0] > size_of_group[1] ? cell0 : cell1; // for balance
         } else {
             cell_to_move = max_gain_of_group[1] > max_gain_of_group[0] ? cell1 : cell0;
         }
@@ -534,8 +525,6 @@ int FiducciaMattheysesPartitioner::move_one_cell(
         << group_of_cell[cell_to_move] << " to " << !group_of_cell[cell_to_move]
         << " gain " << gain_of_cell[cell_to_move] << " cut_size " << cut_size
         << " -> " << cut_size - gain_of_cell[cell_to_move] << endl;
-
-    gain_update_ts++;
 
     // update the gain of the affected cells
     for (size_t i = 0; i < nets_of_cell[cell_to_move].size(); i++) {
@@ -622,7 +611,6 @@ void FiducciaMattheysesPartitioner::increase_gain_of_cell(cell_t cell, gain_t ga
     gain_of_cell[cell] = new_gain;
     push_cell_to_front_of_gain(cell, new_gain, group);
     max_gain_of_group[group] = max(max_gain_of_group[group], new_gain);
-    gain_update_ts_of_cell[cell] = gain_update_ts;
 }
 
 void FiducciaMattheysesPartitioner::push_cell_to_front_of_gain(cell_t cell, gain_t gain, bool group) {
@@ -631,7 +619,6 @@ void FiducciaMattheysesPartitioner::push_cell_to_front_of_gain(cell_t cell, gain
     next_of_cell[cell] = head_cell;
     if (head_cell != -1) prev_of_cell[head_cell] = cell;
     head_cell_of_group_by_gain(group, gain) = cell;
-    gain_update_ts_of_cell[cell] = gain_update_ts;
 }
 
 void FiducciaMattheysesPartitioner::erase_cell_of_gain(cell_t cell, gain_t gain, bool group) {

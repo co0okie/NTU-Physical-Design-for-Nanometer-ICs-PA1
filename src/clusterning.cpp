@@ -52,7 +52,7 @@ ClusteringResult first_choice_clustering(
         for (net_t net : nets_of_cell[cell]) {
             // prevent net with too many cells to save time
             // their contribution to weight is small enough to ignore
-            if (cells_of_net[net].size() > 10) continue; 
+            if (cells_of_net[net].size() > 64) continue; 
             
             double edge_weight = 1.0 / (cells_of_net[net].size() - 1);
             for (cell_t neighbor : cells_of_net[net]) {

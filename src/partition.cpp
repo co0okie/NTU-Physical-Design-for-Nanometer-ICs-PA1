@@ -17,7 +17,7 @@
 #include "partition.h"
 #include "clusterning.h"
 
-constexpr int PARTITION_REPEAT = 16;
+constexpr int PARTITION_REPEAT = 8;
 
 using std::vector; 
 using std::string; 
@@ -192,8 +192,8 @@ tuple<size_t, vector<bool>> hMetis(
     const vector<size_t>& size_of_cell,
     time_point start_time, double time_limit_seconds, int depth
 ) {
-    LOG(INFO) << "*================================== depth " << depth << 
-        " hMetis ==================================* " << endl;
+    LOG(INFO) << "============================== depth " << depth << 
+        " hMetis ==============================" << endl;
     tuple<size_t, vector<bool>> best_result = {UINT64_MAX, {}};
 
     LOG(INFO) << "trying pre-partitioning..." << endl;
@@ -206,8 +206,8 @@ tuple<size_t, vector<bool>> hMetis(
 
     if (result != 0) {
         LOG(INFO) << "pre-partitioning fails, maybe it's too deep" << endl;
-        LOG(INFO) << "*================================== end of depth " << depth << 
-            " hMetis ==================================* " << endl;
+        LOG(INFO) << "============================== end of depth " << depth << 
+            " hMetis ==============================" << endl;
         return {UINT64_MAX, {}};
     }
 
@@ -231,8 +231,8 @@ tuple<size_t, vector<bool>> hMetis(
     if (std::get<1>(hMetis_result).empty()) {
         LOG(INFO) << "problem size small enough to directly partitioning" << endl;
         for (uint32_t r = 1; r <= PARTITION_REPEAT; r++) {
-            LOG(INFO) << "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX repeat " 
-                << r << "/" << PARTITION_REPEAT << " XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX" << endl;
+            LOG(INFO) << "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ repeat " 
+                << r << "/" << PARTITION_REPEAT << " ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" << endl;
             FiducciaMattheysesPartitioner partitioner(
                 balance_degree, cells_of_net, nets_of_cell, 
                 {}, // random initial partition
@@ -266,8 +266,8 @@ tuple<size_t, vector<bool>> hMetis(
     }
 
     
-    LOG(INFO) << "*================================== end of depth " << depth << 
-        " hMetis ==================================* " << endl;
+    LOG(INFO) << "============================== end of depth " << depth << 
+        " hMetis ==============================" << endl;
     return best_result;
 }
 
@@ -366,8 +366,8 @@ int FiducciaMattheysesPartitioner::solve(size_t iteration_limit) {
     LOG(INFO) << "\ninitial cut size: " << cut_size << endl;
     if (!is_balanced()) LOG(INFO) << "initial partition does not satisfy the balance constraint, initial cut size is invalid." << endl;
     for (size_t iter = 0; iter < iteration_limit; iter++) {
-        LOG(INFO) << "================================ iteration " << iter + 1 
-            << " ================================" << endl;
+        LOG(INFO) << "------------------------------ iteration " << iter + 1 
+            << " ------------------------------" << endl;
 
         int result = do_one_iteration(cut_size, iteration_min_cut_size);
         if (result == 1) break;
@@ -438,7 +438,7 @@ int FiducciaMattheysesPartitioner::do_one_iteration(size_t& cut_size, size_t& it
     locked_of_cell.assign(num_of_cells(), false);
 
     for (size_t i = 1 ; unlocked_total_size(); i++) {
-        LOG(DEBUG) << "---------------------------------- move " << i << "th cell ----------------------------------" << endl;
+        LOG(DEBUG) << "- - - - - - - - - - - - move " << i << "th cell - - - - - - - - - - - -" << endl;
 
         int result = move_one_cell(cut_size, min_cut_size, picked_No_after_min_cut, unlocked_size_of_group);
         if (result == 1) break;

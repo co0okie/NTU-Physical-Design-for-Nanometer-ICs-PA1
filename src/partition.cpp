@@ -71,7 +71,7 @@ public:
     // return 0: success
     // return 1: incorrect cut size after trace back, which should not happen
     // return 2: no valid partitioning found
-    int solve();
+    int solve(size_t iteration_limit = SIZE_MAX);
     uint64_t best_cut_size;
     vector<bool> group_of_cell; // cell -> group index (0 or 1)
 
@@ -202,7 +202,7 @@ tuple<size_t, vector<bool>> hMetis(
         balance_degree, cells_of_net, nets_of_cell, {},
         size_of_cell, start_time, time_limit_seconds
     );
-    int result = pre_partitioner.solve();
+    int result = pre_partitioner.solve(1);
 
     if (result != 0) {
         LOG(INFO) << "pre-partitioning fails, maybe it's too deep" << endl;
@@ -336,7 +336,7 @@ FiducciaMattheysesPartitioner::FiducciaMattheysesPartitioner(
     }
 }
 
-int FiducciaMattheysesPartitioner::solve() {
+int FiducciaMattheysesPartitioner::solve(size_t iteration_limit) {
     cell_count_of_net_by_group.assign(num_of_nets(), {0, 0});
     size_of_group = {0, 0};
     for (cell_t cell = 0; cell < num_of_cells(); cell++) {
@@ -365,7 +365,7 @@ int FiducciaMattheysesPartitioner::solve() {
     uint64_t iteration_min_cut_size = is_balanced() ? cut_size : UINT64_MAX;
     LOG(INFO) << "\ninitial cut size: " << cut_size << endl;
     if (!is_balanced()) LOG(INFO) << "initial partition does not satisfy the balance constraint, initial cut size is invalid." << endl;
-    for (size_t iter = 0;; iter++) {
+    for (size_t iter = 0; iter < iteration_limit; iter++) {
         LOG(INFO) << "================================ iteration " << iter + 1 
             << " ================================" << endl;
 
